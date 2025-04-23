@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import pprint
 import random
 from contextlib import suppress
@@ -15,12 +16,16 @@ import numpy
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder
 from aiortc.contrib.signaling import BYE, TcpSocketSignaling, add_signaling_arguments, create_signaling
+from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 from av import VideoFrame
+from dotenv import load_dotenv
 from print_color import print
 from pydantic import BaseModel
 from websockets import connect
+from websockets.exceptions import ConnectionClosedOK
 
+load_dotenv()
 
 class CALL_FLAG(IntEnum):
 	DISCONNECTED = 0
@@ -69,6 +74,16 @@ class WebSocketSignaling:
 
 	async def connect(self):
 		self._server = await connect(self._websopcketURL)
+		await self.send_hello()
+		while True:
+			message = await self.receive()
+			if message['type'] == 'welcome':
+				continue
+			if message['type'] == 'hello':
+				self.sessionid = message['hello']['sessionid']
+				self.resumeid = message['hello']['resumeid']
+				break
+		await self.send_incall()
 
 	async def send_message(self, message: dict):
 		self.id += 1
@@ -145,24 +160,26 @@ class WebSocketSignaling:
 			}
 		})
 
-	async def send_candidate(self, offer_sid, candiate_str):
+	async def send_candidate(self, sender, offer_sid, candidate_str):
 		await self.send_message({
 			"type": "message",
 			"message": {
 				"recipient": {
 					"type": "session",
-					"sessionid": self.sessionid,
+					# "sessionid": self.sessionid,
+					"sessionid": sender,
 				},
 				"data": {
-					"to": self.sessionid,
+					# "to": self.sessionid,
+					"to": sender,
 					"type": "candidate",
 					"sid": offer_sid,
-					"roomType": "video-or-screen",
+					"roomType": "video",
 					"payload": {
 						"candidate": {
-							"candiate": candiate_str,
+							"candidate": candidate_str,
 							"sdpMLineIndex": 0,
-							"sdpMid": "0"
+							"sdpMid": "0",
 						}
 					}
 				}
@@ -177,68 +194,13 @@ class WebSocketSignaling:
 		await self._server.close()
 		self._server = None
 
-	async def receive(self, timeout):
+	async def receive(self):
 		if not self._server:
 			return None
-
-		try:
-			json_msg = asyncio.wait_for(self._server.recv(), timeout)
-		except asyncio.TimeoutError:
-			print('Timeout waiting for message', tag='timeout', color='red')
-			return None
-
-		message = json.loads(json_msg)
+		message = json.loads(await self._server.recv())
 		print('Message received:', tag='received_message', color='purple')
 		pprint.pprint(message)
 		return message
-
-	async def wait_for(self, event, timeout=30):
-		match event:
-			case WaitFor.HELLO:
-				message = await self.receive(timeout)
-				if not message:
-					print('Error receiving response for hello', tag='timeout', color='red')
-					return None
-				if message['type'] == 'hello':
-					self.sessionid = message['hello']['sessionid']
-					self.resumeid = message['hello']['resumeid']
-					return self.sessionid
-
-			case WaitFor.PARTICIPANTS:
-				message = await self.receive(timeout)
-				if not message:
-					print('Error receiving response for participants in room', tag='timeout', color='red')
-					return None
-				if message['type'] == 'event' and message['event']['target'] == 'participants' and message['event']['type'] == 'update':
-					return message
-
-			case WaitFor.OFFER:
-				message = await self.receive(timeout)
-				if not message:
-					print('Error receiving response for offer', tag='timeout', color='red')
-					return None
-				if message['type'] == 'message' and message['message']['data']['type'] == 'offer':
-					return message
-
-			case WaitFor.CANDIDATE:
-				message = await self.receive(timeout)
-				if not message:
-					print('Error receiving response for candidate', tag='timeout', color='red')
-					return None
-				if message['type'] == 'message' and message['message']['data']['type'] == 'candidate':
-					return message
-
-			case WaitFor.MUTEUNMUTE:
-				message = await self.receive(timeout)
-				if not message:
-					print('Error receiving response for mute/unmute', tag='timeout', color='red')
-					return None
-				if message['type'] == 'message' and (message['message']['data']['type'] == 'mute' or message['message']['data']['type'] == 'unmute'):
-					return message
-
-			case _:
-				print('Unknown event type', tag='error', color='yellow')
-				return None
 
 
 class FlagVideoStreamTrack(VideoStreamTrack):
@@ -347,15 +309,12 @@ class VideoReceiver:
 
 
 async def run(pc, signaling, recorder):
-	ice_candidates = []
-	offer_sid = ''
-	answer_sent = Event()
-
 	@pc.on("track")
 	async def on_track(track):
 		print("Receiving %s" % track.kind, tag='track', color='magenta')
 		if track.kind == "video" or track.kind == "audio":
-			asyncio.ensure_future(recorder.handle_track(track))
+			# await asyncio.ensure_future(recorder.handle_track(track))
+			await recorder.handle_track(track)
 		# if track.kind == "audio":
 		# 	recorder.addTrack(track)
 		else:
@@ -376,21 +335,6 @@ async def run(pc, signaling, recorder):
 		print('ICE gathering state changed to', pc.iceGatheringState, tag='ice', color='blue')
 		if pc.iceGatheringState == 'complete':
 			print('All ICE candidates have been gathered.', tag='ice', color='blue')
-			# HAPPENS before we receive candidates from the signalling server
-
-			# send answer after local candidate gathering
-			answer = await pc.createAnswer()
-			await pc.setLocalDescription(answer)
-			await signaling.send_offer_answer(message['message']['data']['from'], message['message']['data']['sid'], answer.sdp)
-			answer_sent.set()
-
-			# for message in ice_candidates:
-			# 	# print('Gathered candidate:', candidate, tag='ice', color='blue')
-			# 	candidate = candidate_from_sdp(message['message']['data']['payload']['candidate']['candidate'])
-			# 	candidate.sdpMid = message['message']['data']['payload']['candidate']['sdpMid']
-			# 	candidate.sdpMLineIndex = message['message']['data']['payload']['candidate']['sdpMLineIndex']
-			# 	await pc.addIceCandidate(candidate)
-			# 	await signaling.send_candidate(offer_sid, message['message']['data']['payload']['candidate']['candidate'])
 
 	#if role == "offer":
 	#	# send offer
@@ -411,79 +355,95 @@ async def run(pc, signaling, recorder):
 		# 	print('Connection closed', tag='connection', color='red')
 		# 	break
 
-	# connect signaling
 	await signaling.connect()
 	await signaling.send_join('i6h8x8q9')
-	await signaling.send_hello()
-	hello = await signaling.wait_for(WaitFor.HELLO, timeout=10)
-	if not hello:
-		print('Error receiving hello', tag='timeout', color='red')
-		return
-	await signaling.send_incall()
+	pc.addTransceiver('audio', direction='recvonly')
+	pc.addTransceiver('video', direction='recvonly')
 
 	print('Connected to signaling server')
 
-	message = await signaling.wait_for(WaitFor.PARTICIPANTS)
-	print('New participants update!', tag='participants', color='blue')
-	for user_description in message['event']['update']['users']:
-		if user_description['inCall'] & CALL_FLAG.IN_CALL and user_description['inCall'] & CALL_FLAG.WITH_AUDIO:
-			print('User join with audio', user_description, tag='participants', color='blue')
-			# pc.addTransceiver('audio', direction='recvonly')
-			# pc.addTransceiver('video', direction='recvonly')
-			targets[user_description['sessionId']] = Target(
-				session_id=user_description['sessionId'],
-				raw_message=user_description,
-				in_call=True,
-				muted=True
-			)
-			await signaling.send_offer_request(user_description['sessionId'])
+	while True:
+		try:
+			message = await signaling.receive()
+		except ConnectionClosedOK:
+			print('Connection closed', tag='connection', color='blue')
+			break
 
-	if message['type'] == 'message' and message['message']['data']['type'] == 'offer':
-		offer_sid = message['message']['data']['sid']
-		await pc.setRemoteDescription(RTCSessionDescription(type='offer', sdp=message['message']['data']['payload']['sdp']))
+		if message['type'] == 'event' and message['event']['target'] == 'participants' and message['event']['type'] == 'update':
+			print('New participants update!', tag='participants', color='blue')
+			for user_description in message['event']['update']['users']:
+				if user_description['inCall'] & CALL_FLAG.IN_CALL and user_description['inCall'] & CALL_FLAG.WITH_AUDIO:
+					print('User join with audio', user_description, tag='participants', color='blue')
+					# pc.addTransceiver('audio', direction='recvonly')
+					# pc.addTransceiver('video', direction='recvonly')
+					targets[user_description['sessionId']] = Target(
+						session_id=user_description['sessionId'],
+						raw_message=user_description,
+						in_call=True,
+						muted=True
+					)
+					await signaling.send_offer_request(user_description['sessionId'])
 
-		# send answer after local candidate gathering
+		if message['type'] == 'message' and message['message']['data']['type'] == 'offer':
+			# offer_sid = message['message']['data']['sid']
+			print('Got offer from', message['message']['sender']['sessionid'], tag='offer', color='blue')
+			targets[message['message']['sender']['sessionid']].in_call = True
+			await pc.setRemoteDescription(RTCSessionDescription(type='offer', sdp=message['message']['data']['payload']['sdp']))
 
-		# answer = await pc.createAnswer()
-		# await pc.setLocalDescription(answer)
-		# await signaling.send_offer_answer(message['message']['data']['from'], message['message']['data']['sid'], answer.sdp)
-		# await recorder.start()
+			answer = await pc.createAnswer()
+			await pc.setLocalDescription(answer)
+			await signaling.send_offer_answer(message['message']['data']['from'], message['message']['data']['sid'], answer.sdp)
 
-	if message['type'] == 'message' and message['message']['data']['type'] == 'candidate':
-		print('got candidate')
-		candidate = candidate_from_sdp(message['message']['data']['payload']['candidate']['candidate'])
-		candidate.sdpMid = message['message']['data']['payload']['candidate']['sdpMid']
-		candidate.sdpMLineIndex = message['message']['data']['payload']['candidate']['sdpMLineIndex']
-		await pc.addIceCandidate(candidate)
-		ice_candidates.append(message)
-	elif answer_sent.is_set():
-		# send all the local candidates to the signaling server
-		cns = pc.localDescription
-		print('local description:', cns, tag='local_description', color='blue')
+			local_sdp = pc.localDescription.sdp
+			# print('local sdp:', local_sdp, tag='sdp', color='blue')
 
-	if (
-		message['type'] == 'message'
-		and (message['message']['data']['type'] == 'mute' or message['message']['data']['type'] == 'unmute')
-		and message['message']['data']['payload']['name'] == 'audio'
-	):
-		# got a audio toggle message
-		if message['message']['data']['type'] == 'mute':
-			print('muting audio for session id', message['message']['sender']['sessionid'])
-		else:
-			print('unmuting audio for session id', message['message']['sender']['sessionid'])
+			for line in local_sdp.splitlines():
+				if line.startswith("a=candidate:"):
+					await signaling.send_candidate(
+						message['message']['sender']['sessionid'],
+						message['message']['data']['sid'],
+						line[2:],
+					)
+
+
+		if message['type'] == 'message' and message['message']['data']['type'] == 'candidate':
+			print('Got candidate', tag='candidate', color='blue')
+			candidate = candidate_from_sdp(message['message']['data']['payload']['candidate']['candidate'])
+			candidate.sdpMid = message['message']['data']['payload']['candidate']['sdpMid']
+			candidate.sdpMLineIndex = message['message']['data']['payload']['candidate']['sdpMLineIndex']
+			await pc.addIceCandidate(candidate)
 
 
 if __name__ == "__main__":
-	#logging.basicConfig(level=logging.DEBUG)
+	# todo: call spreed for ice servers
 
 	# create signaling and peer connection
 	app_started.set()
 	signaling = WebSocketSignaling(
 		'wss://hpb.somewhere.com/standalone-signaling/spreed',
 		'https://my.nextcloud.com',
-		"mylittlesecret"
+		os.environ["SIGNALLING_SECRET"],
 	)
-	pc = RTCPeerConnection()
+
+	ice_servers = RTCConfiguration(
+		iceServers=[
+			RTCIceServer(
+				urls=[
+					"stun:hpb.somewhere.com:3478",
+					"stun:hpb.nowhere.com:3478",
+				],
+			),
+			RTCIceServer(
+				urls=[
+					"turn:hpb.everywhere.com:3478?transport=udp",
+					"turn:hpb.everywhere.com:3478?transport=tcp",
+				],
+				username=os.environ["TURN_USER"],
+				credential=os.environ["TURN_PASS"],
+			),
+		],
+	)
+	pc = RTCPeerConnection(configuration=ice_servers)
 	# recorder = MediaRecorder("/home/tyrell/nextcloud-docker-dev/workspace/live-transcription-tests/output.mp3")
 	recorder = VideoReceiver()
 
