@@ -2,5 +2,6 @@ aiortc
 av
 dotenv
 opencv-python
+nc_py_api
 pydantic
 websockets

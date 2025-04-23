@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import datetime
 import hashlib
 import hmac
@@ -12,6 +13,7 @@ from enum import Enum, IntEnum
 from threading import Event
 
 import cv2
+import httpx
 import numpy
 from aiortc import RTCPeerConnection, RTCSessionDescription, VideoStreamTrack
 from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder
@@ -312,13 +314,15 @@ async def run(pc, signaling, recorder):
 	@pc.on("track")
 	async def on_track(track):
 		print("Receiving %s" % track.kind, tag='track', color='magenta')
-		if track.kind == "video" or track.kind == "audio":
+		# if track.kind == "video" or track.kind == "audio":
+		if track.kind == "audio":
+			recorder.addTrack(track)
 			# await asyncio.ensure_future(recorder.handle_track(track))
-			await recorder.handle_track(track)
+			# await recorder.handle_track(track)
 		# if track.kind == "audio":
 		# 	recorder.addTrack(track)
-		else:
-			print("Unknown track kind: %s" % track.kind, tag='track', color='red')
+		# else:
+		# 	print("Unknown track kind: %s" % track.kind, tag='track', color='red')
 
 	# @pc.on('iceconnectionstatechange')
 	# async def on_iceconnectionstatechange():
@@ -358,7 +362,7 @@ async def run(pc, signaling, recorder):
 	await signaling.connect()
 	await signaling.send_join('i6h8x8q9')
 	pc.addTransceiver('audio', direction='recvonly')
-	pc.addTransceiver('video', direction='recvonly')
+	# pc.addTransceiver('video', direction='recvonly')
 
 	print('Connected to signaling server')
 
@@ -405,6 +409,8 @@ async def run(pc, signaling, recorder):
 						line[2:],
 					)
 
+			await recorder.start()
+
 
 		if message['type'] == 'message' and message['message']['data']['type'] == 'candidate':
 			print('Got candidate', tag='candidate', color='blue')
@@ -417,6 +423,23 @@ async def run(pc, signaling, recorder):
 if __name__ == "__main__":
 	# todo: call spreed for ice servers
 
+	res = httpx.get('https://my.nextcloud.com/ocs/v2.php/apps/spreed/api/v3/signaling/settings',
+		headers={
+			'OCS-APIRequest': 'true',
+			'Authorization': 'Bearer ' + base64.b64encode(f'{os.environ['NC_USER']}:{os.environ['NC_PASS']}'.encode()).decode(),
+		},
+		params={
+			'token': '8s8dhi2',
+			'format': 'json',
+		},
+	)
+	res.raise_for_status()
+
+	stun_servers = res.json()['ocs']['data']['stunservers'][0]
+	turn_servers = res.json()['ocs']['data']['turnservers'][0]
+	print('STUN servers:', stun_servers, tag='servers', color='magenta')
+	print('TURN servers:', turn_servers, tag='servers', color='magenta')
+
 	# create signaling and peer connection
 	app_started.set()
 	signaling = WebSocketSignaling(
@@ -427,25 +450,17 @@ if __name__ == "__main__":
 
 	ice_servers = RTCConfiguration(
 		iceServers=[
+			RTCIceServer(urls=stun_servers['urls']),
 			RTCIceServer(
-				urls=[
-					"stun:hpb.somewhere.com:3478",
-					"stun:hpb.nowhere.com:3478",
-				],
-			),
-			RTCIceServer(
-				urls=[
-					"turn:hpb.everywhere.com:3478?transport=udp",
-					"turn:hpb.everywhere.com:3478?transport=tcp",
-				],
-				username=os.environ["TURN_USER"],
-				credential=os.environ["TURN_PASS"],
+				urls=turn_servers['urls'],
+				username=turn_servers['username'],
+				credential=turn_servers['credential'],
 			),
 		],
 	)
 	pc = RTCPeerConnection(configuration=ice_servers)
-	# recorder = MediaRecorder("/home/tyrell/nextcloud-docker-dev/workspace/live-transcription-tests/output.mp3")
-	recorder = VideoReceiver()
+	recorder = MediaRecorder("/home/skojon/nextcloud-docker-dev/workspace/live-transcription-tests/output.ogg")
+	# recorder = VideoReceiver()
 
 	# run event loop
 	loop = asyncio.get_event_loop()
@@ -462,6 +477,6 @@ if __name__ == "__main__":
 	finally:
 		# cleanup
 		app_started.clear()
-		# loop.run_until_complete(recorder.stop())
+		loop.run_until_complete(recorder.stop())
 		loop.run_until_complete(signaling.close())
 		loop.run_until_complete(pc.close())
