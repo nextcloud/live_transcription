@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -11,12 +12,15 @@ from threading import Event
 
 import httpx
 from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaRecorder
+# from aiortc.contrib.media import MediaRecorder
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
+from av.audio.resampler import AudioResampler
 from dotenv import load_dotenv
+from nc_py_api.ex_app import persistent_storage
 from print_color import print
 from pydantic import BaseModel
+from vosk import KaldiRecognizer, Model
 from websockets import connect
 from websockets.exceptions import ConnectionClosedOK
 
@@ -198,12 +202,91 @@ class WebSocketSignaling:
 		return message
 
 
-async def run(pc, signaling, recorder):
+vosk_interface = os.environ.get('VOSK_SERVER_INTERFACE', '0.0.0.0')
+vosk_port = int(os.environ.get('VOSK_SERVER_PORT', 2700))
+vosk_model_path = os.environ.get('VOSK_MODEL_PATH', persistent_storage())
+vosk_dump_file = os.environ.get('VOSK_DUMP_FILE', None)
+
+model = Model(vosk_model_path)
+pool = concurrent.futures.ThreadPoolExecutor((os.cpu_count() or 1))
+dump_fd = None if vosk_dump_file is None else open(vosk_dump_file, "wb")
+
+
+def process_chunk(rec, message):
+	try:
+		res = rec.AcceptWaveform(message)
+	except Exception:
+		result = None
+	else:
+		if res > 0:
+			result = rec.Result()
+		else:
+			result = rec.PartialResult()
+	return result
+
+
+class VoskTranscriber:
+	def __init__(self, user_connection):
+		self.__resampler = AudioResampler(format='s16', layout='mono', rate=48000)
+		self.__pc = user_connection
+		self.__audio_task = None
+		self.__track = None
+		self.__channel = None
+		self.__recognizer = KaldiRecognizer(model, 48000)
+
+
+	async def set_audio_track(self, track):
+		self.__track = track
+
+	async def set_text_channel(self, channel):
+		self.__channel = channel
+
+	async def start(self):
+		self.__audio_task = asyncio.create_task(self.__run_audio_xfer())
+
+	async def stop(self):
+		if self.__audio_task is not None:
+			self.__audio_task.cancel()
+			self.__audio_task = None
+
+	async def __run_audio_xfer(self):
+		loop = asyncio.get_running_loop()
+
+		max_frames = 20
+		frames = []
+		while True:
+			fr = await self.__track.recv()
+			frames.append(fr)
+
+			# We need to collect frames so we don't send partial results too often
+			if len(frames) < max_frames:
+				continue
+
+			dataframes = bytearray(b'')
+			for fr in frames:
+				for rfr in self.__resampler.resample(fr):
+					dataframes += bytes(rfr.planes[0])[:rfr.samples * 2]
+			frames.clear()
+
+			if dump_fd is not None:
+				dump_fd.write(bytes(dataframes))
+
+			result = await loop.run_in_executor(pool, process_chunk, self.__recognizer, bytes(dataframes))
+			print(result)
+			# self.__channel.send(result)
+
+
+async def run(pc, signaling, transcriber):
 	@pc.on("track")
 	async def on_track(track):
-		print("Receiving %s" % track.kind, tag='track', color='magenta')
 		if track.kind == "audio":
-			recorder.addTrack(track)
+			print("Receiving %s" % track.kind, tag='track', color='magenta')
+			await transcriber.set_audio_track(track)
+
+		@track.on("ended")
+		async def on_ended():
+			print("Track ended", tag='track', color='magenta')
+			await transcriber.stop()
 
 	@pc.on('connectionstatechange')
 	async def on_connectionstatechange():
@@ -274,7 +357,7 @@ async def run(pc, signaling, recorder):
 						line[2:],
 					)
 
-			await recorder.start()
+			await transcriber.start()
 
 
 		if message['type'] == 'message' and message['message']['data']['type'] == 'candidate':
@@ -324,7 +407,8 @@ if __name__ == "__main__":
 		],
 	)
 	pc = RTCPeerConnection(configuration=ice_servers)
-	recorder = MediaRecorder("/home/tyrell/nextcloud-docker-dev/workspace/live-transcription-tests/output.ogg")
+	# recorder = MediaRecorder("/home/tyrell/nextcloud-docker-dev/workspace/live-transcription-tests/output.ogg")
+	transcriber = VoskTranscriber(pc)
 
 	# run event loop
 	loop = asyncio.get_event_loop()
@@ -333,7 +417,7 @@ if __name__ == "__main__":
 			run(
 				pc=pc,
 				signaling=signaling,
-				recorder=recorder,
+				transcriber=transcriber,
 			)
 		)
 	except KeyboardInterrupt:
@@ -341,6 +425,6 @@ if __name__ == "__main__":
 	finally:
 		# cleanup
 		app_started.clear()
-		loop.run_until_complete(recorder.stop())
+		loop.run_until_complete(transcriber.stop())
 		loop.run_until_complete(signaling.close())
 		loop.run_until_complete(pc.close())

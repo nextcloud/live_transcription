@@ -3,5 +3,7 @@ av
 dotenv
 opencv-python
 nc_py_api
+print_color
 pydantic
+vosk
 websockets
