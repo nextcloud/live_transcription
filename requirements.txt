@@ -1,9 +1,9 @@
 aiortc
 av
 dotenv
-opencv-python
 nc_py_api
 print_color
 pydantic
+uvicorn
 vosk
 websockets

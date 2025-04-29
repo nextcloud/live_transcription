@@ -3,3 +3,4 @@
 .venv/
 persistent_storage/
 .env
+__pycache__/
