@@ -13,6 +13,7 @@ from enum import IntEnum
 from functools import partial
 from traceback import print_exc
 from typing import Any, Generator
+from urllib.parse import urlparse
 
 from aiortc import AudioStreamTrack, RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
@@ -21,7 +22,7 @@ from av.audio.resampler import AudioResampler
 from av.frame import Frame
 from dotenv import load_dotenv
 from livetypes import HPBSettings, StreamEndedException
-from nc_py_api import NextcloudApp
+from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import persistent_storage
 from print_color import print
 from vosk import KaldiRecognizer, Model
@@ -65,11 +66,8 @@ class SpreedClient:
 		self.sessionid = None
 
 		nc = NextcloudApp()
-		# todo: check if suffix 'spreed' is already in the url
-		self._websopcketURL = hpb_location
-		# todo
-		# self._backendURL = nc.app_cfg.endpoint + '/ocs/v2.php/apps/spreed/api/v3/signaling/backend'
-		self._backendURL = f'{os.environ["NEXTCLOUD_URL2"]}/ocs/v2.php/apps/spreed/api/v3/signaling/backend'
+		self._websopcketURL = os.environ["LT_HPB_URL"]
+		self._backendURL = nc.app_cfg.endpoint + '/ocs/v2.php/apps/spreed/api/v3/signaling/backend'
 		self.secret = auth_token
 
 		self.room_token = room_token
@@ -404,40 +402,40 @@ class Application:
 	spreedClients: dict[str, SpreedClient] = {}
 	transcribers: dict[str, VoskTranscriber] = {}
 
-	def __init__(self):
-		import httpx
+	def __init__(self, hpb_settings: HPBSettings):
+		self.hpb_settings = hpb_settings
 
-		self.client = httpx.AsyncClient()
-
-	async def join_call(self, room_token: str, auth_token: str, hpb_location: str, hpb_settings: HPBSettings) -> None:
+	async def join_call(self, room_token: str, auth_token: str, hpb_location: str) -> None:
 		"""Join a call."""
 		print(f"Joining call with room token: {room_token}, auth token: {auth_token}, hpb location: {hpb_location}")
 		# todo
-		self.send_chat_msg(room_token, "Transcriber is joining the call")
-		self.spreedClients[room_token] = SpreedClient(room_token, auth_token, hpb_location, hpb_settings, self.stream_listener)
+		self.spreedClients[room_token] = SpreedClient(room_token, auth_token, hpb_location, self.hpb_settings, self.stream_listener)
 		await self.spreedClients[room_token].connect()
 
 	async def send_chat_msg(self, room_token: str, message: str) -> None:
-		# nc = NextcloudApp()
-		# nc.talk.send_message(message, room_token, actor_display_name="Transcriber")
-		import base64
+		# todo: doesn't work
+		nc = AsyncNextcloudApp()
+		nc.set_user("admin")
+		await nc.talk.send_message(message, room_token, actor_display_name="Transcriber")
 
-		params = {
-			"message": message,
-			"actorDisplayName": "transcriber",
-			"referenceId": hashlib.sha256("7a5de6443be1b885dbad887fad026aa2dbb3df299928ac2bad66bf9bacb62920".encode("UTF-8")).hexdigest(),
-			"format": "json",
-		}
-		r = await self.client.post(f"{os.environ["NEXTCLOUD_URL2"]}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}", json=params, headers={
-			"OCS-APIRequest": "true",
-			# "Accept": "application/json",
-			"content-type": "application/json",
-			'Authorization': 'Basic ' + base64.b64encode(f'{os.environ['NC_USER']}:{os.environ['NC_PASS']}'.encode()).decode(),
-		})
-		if r.status_code // 100 != 2:
-			print(f"Error sending chat message: {r.text}", tag='chat', color='red')
-		else:
-			print(f"Chat message sent: {message}", tag='chat', color='green')
+		# import base64
+
+		# params = {
+		# 	"message": message,
+		# 	"actorDisplayName": "transcriber",
+		# 	"referenceId": hashlib.sha256("7a5de6443be1b885dbad887fad026aa2dbb3df299928ac2bad66bf9bacb62920".encode("UTF-8")).hexdigest(),
+		# 	"format": "json",
+		# }
+		# r = await self.client.post(f"{os.environ["NEXTCLOUD_URL2"]}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}", json=params, headers={
+		# 	"OCS-APIRequest": "true",
+		# 	# "Accept": "application/json",
+		# 	"content-type": "application/json",
+		# 	'Authorization': 'Basic ' + base64.b64encode(f'{os.environ['NC_USER']}:{os.environ['NC_PASS']}'.encode()).decode(),
+		# })
+		# if r.status_code // 100 != 2:
+		# 	print(f"Error sending chat message: {r.text}", tag='chat', color='red')
+		# else:
+		# 	print(f"Chat message sent: {message}", tag='chat', color='green')
 
 	def stream_listener(self, session_id: str, user_id: str, stream: AudioStream, room_token: str) -> None:
 		"""Handle incoming audio stream."""
@@ -450,3 +448,25 @@ class Application:
 			asyncio.get_event_loop(),
 		)
 		print(f"Started transcriber for {user_id} in {language}")
+
+def check_hpb_env_vars():
+	# Check if the required environment variables are set
+	required_vars = ("LT_HPB_URL", "LT_INTERNAL_SECRET")
+	missing_vars = [var for var in required_vars if not os.getenv(var)]
+	if missing_vars:
+		raise ValueError(f"Missing environment variables: {', '.join(missing_vars)}")
+
+	hpb_url = os.environ["LT_HPB_URL"]
+	hpb_url_host = urlparse(hpb_url).hostname
+	if not hpb_url_host:
+		raise ValueError(f"Invalid HPB URL: {hpb_url}")
+
+
+def get_hpb_settings() -> HPBSettings:
+	try:
+		nc = NextcloudApp()
+		settings = nc.ocs("GET", "/ocs/v2.php/apps/spreed/api/v3/signaling/settings")
+		return HPBSettings(**settings)
+	except Exception as e:
+		print_exc()
+		raise Exception("Error getting HPB settings") from e

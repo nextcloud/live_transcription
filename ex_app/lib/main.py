@@ -17,20 +17,24 @@ from fastapi.responses import JSONResponse
 from nc_py_api import NextcloudApp, NextcloudException
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, nc_app, run_app, set_handlers
 from pydantic import BaseModel
-from service import Application
+from service import Application, check_hpb_env_vars, get_hpb_settings
 
 load_dotenv()
+application: Application
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global application
     set_handlers(app, enabled_handler, default_init=False)
+    check_hpb_env_vars()
+    hpb_settings = get_hpb_settings()
+    application = Application(hpb_settings)
     yield
 
 
 APP = FastAPI(lifespan=lifespan)
 # APP.add_middleware(AppAPIAuthMiddleware)  # set global AppAPI authentication middleware
 
-application = Application()
 
 class TranscribeRequest(BaseModel):
     roomToken: str
@@ -40,35 +44,7 @@ class TranscribeRequest(BaseModel):
 
 @APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest, bg: BackgroundTasks):
-    try:
-        import base64
-
-        import httpx
-
-        # todo
-        # nc = NextcloudApp()
-        # settings = nc.ocs("/ocs/v2.php/apps/spreed/api/v3/signaling/settings", params={ 'token': req.roomToken })
-        settings = httpx.get(f'{os.environ["NEXTCLOUD_URL2"]}/ocs/v2.php/apps/spreed/api/v3/signaling/settings',
-            headers={
-                'OCS-APIRequest': 'true',
-                'Authorization': 'Bearer ' + base64.b64encode(f'{os.environ['NC_USER']}:{os.environ['NC_PASS']}'.encode()).decode(),
-            },
-            params={
-                'token': req.roomToken,
-                'format': 'json',
-            },
-        )
-        if settings.status_code != 200:
-            raise NextcloudException(f"Error getting settings: {settings.text}")
-        print(f"Settings: {settings.json()}", flush=True)
-        settings = settings.json()['ocs']['data']
-
-    except NextcloudException as e:
-        print(f"Error getting settings: {e}")
-        return JSONResponse(status_code=500, content={"error": "Error getting HPB settings for " + req.hpbLocation})
-
-    # await application.join_call(req.roomToken, req.authToken, req.hpbLocation, HPBSettings(**settings))
-    bg.add_task(application.join_call, req.roomToken, req.authToken, req.hpbLocation, HPBSettings(**settings))
+    bg.add_task(application.join_call, req.roomToken, req.authToken, req.hpbLocation)
 
 
 def report_100():
