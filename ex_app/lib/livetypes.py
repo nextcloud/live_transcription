@@ -20,3 +20,8 @@ class HPBSettings(BaseModel):
 class StreamEndedException(Exception):
 	...
 
+
+class TranscribeRequest(BaseModel):
+	roomToken: str
+	sessionId: str
+	enable: bool

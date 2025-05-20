@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated
 
 # isort: off
-from livetypes import HPBSettings
+from livetypes import TranscribeRequest
 # isort: on
 
 from dotenv import load_dotenv
@@ -36,15 +36,9 @@ APP = FastAPI(lifespan=lifespan)
 # APP.add_middleware(AppAPIAuthMiddleware)  # set global AppAPI authentication middleware
 
 
-class TranscribeRequest(BaseModel):
-    roomToken: str
-    authToken: str
-    hpbLocation: str
-
-
 @APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest, bg: BackgroundTasks):
-    bg.add_task(application.join_call, req.roomToken, req.authToken, req.hpbLocation)
+    bg.add_task(application.join_call, req)
 
 
 def report_100():
