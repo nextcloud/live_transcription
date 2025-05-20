@@ -1,22 +1,17 @@
 """Simplest example."""
 
-import asyncio
-import datetime
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
 
 # isort: off
 from livetypes import TranscribeRequest
 # isort: on
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, Depends, FastAPI, Request, WebSocket
-from fastapi.responses import JSONResponse
-from nc_py_api import NextcloudApp, NextcloudException
-from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, nc_app, run_app, set_handlers
-from pydantic import BaseModel
+from fastapi import BackgroundTasks, FastAPI
+from nc_py_api import NextcloudApp
+from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, run_app, set_handlers
 from service import Application, check_hpb_env_vars, get_hpb_settings
 
 load_dotenv()
@@ -38,7 +33,7 @@ APP = FastAPI(lifespan=lifespan)
 
 @APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest, bg: BackgroundTasks):
-    bg.add_task(application.join_call, req)
+    bg.add_task(application.transcript_req, req)
 
 
 def report_100():
