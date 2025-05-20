@@ -25,3 +25,7 @@ class TranscribeRequest(BaseModel):
 	roomToken: str
 	sessionId: str
 	enable: bool
+
+class Target(BaseModel):
+	# todo: any metadata or can be reduced to just a list of session ids?
+	...

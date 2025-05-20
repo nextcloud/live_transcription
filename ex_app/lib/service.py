@@ -11,6 +11,7 @@ import random
 from collections.abc import Callable
 from enum import IntEnum
 from functools import partial
+from threading import RLock
 from traceback import print_exc
 from typing import Any, Generator
 from urllib.parse import urlparse
@@ -21,7 +22,7 @@ from aiortc.sdp import candidate_from_sdp
 from av.audio.resampler import AudioResampler
 from av.frame import Frame
 from dotenv import load_dotenv
-from livetypes import HPBSettings, StreamEndedException, TranscribeRequest
+from livetypes import HPBSettings, StreamEndedException, Target, TranscribeRequest
 from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import persistent_storage
 from print_color import print
@@ -53,12 +54,14 @@ class SpreedClient:
 		self,
 		room_token: str,
 		hpb_settings: HPBSettings,
-		stream_listener: Callable[[str, Any], None], # user_id, stream
+		stream_listener: Callable[[str, Any, str], None], # session_id, stream, room_token
 	) -> None:
 		self.id = 0
 		self._server = None
 		self._monitor = None
 		self.peer_connections: dict[str, PeerConnection] = {}
+		self.targets: dict[str, Target] = {}
+		self.target_lock = RLock()
 
 		self.resumeid = None
 		self.sessionid = None
@@ -194,17 +197,18 @@ class SpreedClient:
 			}
 		})
 
-	async def send_transcript(self, message: str, session_id: str):
+	async def send_transcript(self, message: str, to_session_id: str, spk_session_id: str):
 		await self.send_message({
 			"type": "message",
 			"message": {
 				"recipient": {
 					"type": "session",
-					"sessionid": session_id,
+					"sessionid": to_session_id,
 				},
 				"data": {
 					"message": message,
 					"type": "transcript",
+					"speakerSessionId": spk_session_id,
 				}
 			}
 		})
@@ -227,6 +231,25 @@ class SpreedClient:
 		# print('Message received:', tag='received_message', color='purple')
 		# pprint.pprint(message)
 		return message
+
+	def add_target(self, session_id: str):
+		with self.target_lock:
+			if session_id not in self.targets:
+				self.targets[session_id] = Target()
+			else:
+				print(f"Target '{session_id}' already exists", tag="target", color="yellow")
+
+	def remove_target(self, session_id: str):
+		# todo: start timeout for leaving the call here
+		with self.target_lock:
+			if session_id in self.targets:
+				del self.targets[session_id]
+			else:
+				print(f"Target '{session_id}' does not exist", tag="target", color="yellow")
+
+	def is_target(self, session_id: str) -> bool:
+		with self.target_lock:
+			return session_id in self.targets
 
 	async def signalling_monitor(self):
 		"""Monitor the signaling server for incoming messages."""
@@ -288,7 +311,7 @@ class SpreedClient:
 			if track.kind == "audio":
 				print("Receiving %s" % track.kind, tag='track', color='magenta')
 				stream = AudioStream(track)
-				self.stream_listener(message['message']['sender']['sessionid'], 'dummy', stream, self.room_token)
+				self.stream_listener(message['message']['sender']['sessionid'], stream, self.room_token)
 		self.peer_connections[message['message']['sender']['sessionid']] = PeerConnection(
 			# todo
 			user_id='dummy',
@@ -416,36 +439,64 @@ class VoskTranscriber:
 
 
 class Application:
-	spreedClients: dict[str, SpreedClient] = {}
+	spreed_clients: dict[str, SpreedClient] = {}
 	transcribers: dict[str, VoskTranscriber] = {}
 
 	def __init__(self, hpb_settings: HPBSettings):
 		self.hpb_settings = hpb_settings
 
-	async def join_call(self, req: TranscribeRequest) -> None:
-		"""Join a call."""
+	async def transcript_req(self, req: TranscribeRequest) -> None:
 		print(f"Joining call with {req}")
+		if req.roomToken in self.spreed_clients:
+			print(f"Already in call with room token: {req.roomToken}, adding target {req.sessionId}")
+			if req.enable:
+				self.spreed_clients[req.roomToken].add_target(req.sessionId)
+			else:
+				self.spreed_clients[req.roomToken].remove_target(req.sessionId)
+			return
+
+		if not req.enable:
+			print(
+				f"Received request to turn off transcription for room token: {req.roomToken}, "
+				"session id: {req.sessionId}\nbut no call is active. Ignoring request.",
+			)
+			return
+
+		# todo: join if not already in call
+		print(f"Joining call with room token: {req.roomToken}, req.sessionId: {req.sessionId}")
 		# todo
-		self.spreedClients[req.roomToken] = SpreedClient(req.roomToken, self.hpb_settings, self.stream_listener)
-		await self.spreedClients[req.roomToken].connect()
+		# self.xcript_msg_queues[req.roomToken] = Queue()
+		self.spreed_clients[req.roomToken] = SpreedClient(
+			req.roomToken,
+			# self.xcript_msg_queues[req.roomToken],
+			self.hpb_settings,
+			self.stream_listener,
+			# todo: verify if this works
+			# partial(self.exit_room, req.roomToken),  # type: ignore[arg-type]
+		)
+		self.spreed_clients[req.roomToken].add_target(req.sessionId)
+		# todo: add reconnect logic with asyncio.create_task
+		await self.spreed_clients[req.roomToken].connect()
 
-	async def send_chat_msg(self, room_token: str, message: str) -> None:
-		# todo: doesn't work
-		nc = AsyncNextcloudApp()
-		nc.set_user("admin")
-		await nc.talk.send_message(message, room_token, actor_display_name="Transcriber")
+	async def send_chat_msg(self, room_token: str, spk_session_id: str, message: str) -> None:
+		print("speaker session id:", spk_session_id, tag='vosk', color='green')
+		client = self.spreed_clients[room_token]
+		with client.target_lock:
+			sids = list(client.targets.keys())
+		for sid in sids:
+			await client.send_transcript(message, sid, spk_session_id)
 
-	def stream_listener(self, session_id: str, user_id: str, stream: AudioStream, room_token: str) -> None:
+	def stream_listener(self, session_id: str, stream: AudioStream, room_token: str) -> None:
 		"""Handle incoming audio stream."""
-		print(f"Received audio stream from {user_id}")
+		print(f"Received audio stream from {session_id}")
 		language = "en"  # TODO: Get language from stream/ocs
 		if language not in self.transcribers:
 			self.transcribers[language] = VoskTranscriber(language)
 		asyncio.run_coroutine_threadsafe(
-			self.transcribers[language].start(session_id, stream, partial(self.send_chat_msg, room_token)),
+			self.transcribers[language].start(session_id, stream, partial(self.send_chat_msg, room_token, session_id)),
 			asyncio.get_event_loop(),
 		)
-		print(f"Started transcriber for {user_id} in {language}")
+		print(f"Started transcriber for {session_id} in {language}")
 
 def check_hpb_env_vars():
 	# Check if the required environment variables are set
