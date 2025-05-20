@@ -53,6 +53,7 @@ class SpreedClient:
 	def __init__(
 		self,
 		room_token: str,
+		# transcript_queue: asyncio.Queue,
 		hpb_settings: HPBSettings,
 		stream_listener: Callable[[str, Any, str], None], # session_id, stream, room_token
 	) -> None:
@@ -62,6 +63,7 @@ class SpreedClient:
 		self.peer_connections: dict[str, PeerConnection] = {}
 		self.targets: dict[str, Target] = {}
 		self.target_lock = RLock()
+		# self.transcript_queue = transcript_queue
 
 		self.resumeid = None
 		self.sessionid = None
@@ -94,6 +96,7 @@ class SpreedClient:
 				self.resumeid = message['hello']['resumeid']
 				break
 		self._monitor = asyncio.create_task(self.signalling_monitor())
+		# self._transcript_sender = asyncio.create_task(self.transcript_sender())
 		await self.send_incall()
 		await self.send_join()
 		print('Connected to signaling server')
@@ -197,21 +200,26 @@ class SpreedClient:
 			}
 		})
 
-	async def send_transcript(self, message: str, to_session_id: str, spk_session_id: str):
-		await self.send_message({
-			"type": "message",
-			"message": {
-				"recipient": {
-					"type": "session",
-					"sessionid": to_session_id,
-				},
-				"data": {
-					"message": message,
-					"type": "transcript",
-					"speakerSessionId": spk_session_id,
+	async def send_transcript(self, message: str, spk_session_id: str):
+		# todo
+		print("speaker session id:", spk_session_id, tag='vosk', color='green')
+		with self.target_lock:
+			sids = list(self.targets.keys())
+		for sid in sids:
+			await self.send_message({
+				"type": "message",
+				"message": {
+					"recipient": {
+						"type": "session",
+						"sessionid": sid,
+					},
+					"data": {
+						"message": message,
+						"type": "transcript",
+						"speakerSessionId": spk_session_id,
+					}
 				}
-			}
-		})
+			})
 
 	async def close(self):
 		await self.send_message({
@@ -250,6 +258,35 @@ class SpreedClient:
 	def is_target(self, session_id: str) -> bool:
 		with self.target_lock:
 			return session_id in self.targets
+
+	# async def transcript_sender(self, spk_session_id: str, message: str) -> None:
+	# 	while True:
+	# 		message = await self.transcript_queue.get()
+	# 		if message is None:
+	# 			# our task is done
+	# 			break
+
+	# 		try:
+	# 			json_msg = json.loads(message)
+	# 		except json.JSONDecodeError:
+	# 			print("Error decoding JSON message:", message, tag="vosk", color="red")
+	# 			continue
+
+	# 		if "partial" in json_msg:
+	# 			return
+
+	# 		message = json_msg["text"]
+	# 		if message == "":
+	# 			return
+
+	# 		try:
+	# 			await asyncio.wait_for(self.send_transcript(message, self.room_token, spk_session_id), timeout=10)
+	# 		except TimeoutError:
+	# 			print("Timeout waiting for transcript sender", tag="vosk", color="red")
+	# 			continue
+	# 		except Exception as e:
+	# 			print("Error sending transcript in room ", self.room_token, e, tag="vosk", color="red")
+	# 			continue
 
 	async def signalling_monitor(self):
 		"""Monitor the signaling server for incoming messages."""
@@ -428,8 +465,23 @@ class VoskTranscriber:
 				frames.clear()
 
 				result = await loop.run_in_executor(vosk_pool, process_chunk, self.__recognizer, bytes(dataframes))
-				print(result, tag='vosk', color='green')
+
 				# todo
+				print(result, tag='vosk', color='green')
+
+				# try:
+				# 	json_msg = json.loads(result)
+				# except json.JSONDecodeError:
+				# 	print("Error decoding JSON message:", result, tag="vosk", color="red")
+				# 	continue
+
+				# if "partial" in json_msg:
+				# 	return
+
+				# message = json_msg["text"]
+				# if message == "":
+				# 	return
+
 				asyncio.create_task(text_listener(result))
 		except StreamEndedException:
 			print("Stream ended", tag='stream', color='red')
@@ -441,6 +493,7 @@ class VoskTranscriber:
 class Application:
 	spreed_clients: dict[str, SpreedClient] = {}
 	transcribers: dict[str, VoskTranscriber] = {}
+	transcript_queue: asyncio.Queue = asyncio.Queue()
 
 	def __init__(self, hpb_settings: HPBSettings):
 		self.hpb_settings = hpb_settings
@@ -465,10 +518,10 @@ class Application:
 		# todo: join if not already in call
 		print(f"Joining call with room token: {req.roomToken}, req.sessionId: {req.sessionId}")
 		# todo
-		# self.xcript_msg_queues[req.roomToken] = Queue()
+		# self.transcript_queues[req.roomToken] = asyncio.Queue()
 		self.spreed_clients[req.roomToken] = SpreedClient(
 			req.roomToken,
-			# self.xcript_msg_queues[req.roomToken],
+			# self.transcript_queues[req.roomToken],
 			self.hpb_settings,
 			self.stream_listener,
 			# todo: verify if this works
@@ -476,15 +529,31 @@ class Application:
 		)
 		self.spreed_clients[req.roomToken].add_target(req.sessionId)
 		# todo: add reconnect logic with asyncio.create_task
+		asyncio.create_task(self.queue_consumer())
 		await self.spreed_clients[req.roomToken].connect()
 
-	async def send_chat_msg(self, room_token: str, spk_session_id: str, message: str) -> None:
-		print("speaker session id:", spk_session_id, tag='vosk', color='green')
-		client = self.spreed_clients[room_token]
-		with client.target_lock:
-			sids = list(client.targets.keys())
-		for sid in sids:
-			await client.send_transcript(message, sid, spk_session_id)
+	async def on_transcript(self, room_token: str, spk_session_id: str, message: str):
+		sclient = self.spreed_clients.get(room_token)
+		if sclient is None:
+			print(f"Error: no SpreedClient for room token {room_token}", tag="vosk", color="red")
+			return
+		await self.transcript_queue.put(sclient.send_transcript(message, spk_session_id))
+
+	async def queue_consumer(self):
+		while True:
+			coroutine = await self.transcript_queue.get()
+			if coroutine is None:
+				# our task is done
+				break
+
+			try:
+				await asyncio.wait_for(coroutine, timeout=10)
+			except TimeoutError:
+				print("Timeout waiting for transcript sender", tag="vosk", color="red")
+				continue
+			except Exception as e:
+				print("Error sending transcript in room ", self.room_token, e, tag="vosk", color="red")
+				continue
 
 	def stream_listener(self, session_id: str, stream: AudioStream, room_token: str) -> None:
 		"""Handle incoming audio stream."""
@@ -493,7 +562,7 @@ class Application:
 		if language not in self.transcribers:
 			self.transcribers[language] = VoskTranscriber(language)
 		asyncio.run_coroutine_threadsafe(
-			self.transcribers[language].start(session_id, stream, partial(self.send_chat_msg, room_token, session_id)),
+			self.transcribers[language].start(session_id, stream, partial(self.on_transcript, room_token, session_id)),
 			asyncio.get_event_loop(),
 		)
 		print(f"Started transcriber for {session_id} in {language}")
