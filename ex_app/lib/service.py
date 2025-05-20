@@ -21,7 +21,7 @@ from aiortc.sdp import candidate_from_sdp
 from av.audio.resampler import AudioResampler
 from av.frame import Frame
 from dotenv import load_dotenv
-from livetypes import HPBSettings, StreamEndedException
+from livetypes import HPBSettings, StreamEndedException, TranscribeRequest
 from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import persistent_storage
 from print_color import print
@@ -52,8 +52,6 @@ class SpreedClient:
 	def __init__(
 		self,
 		room_token: str,
-		auth_token: str,
-		hpb_location: str,
 		hpb_settings: HPBSettings,
 		stream_listener: Callable[[str, Any], None], # user_id, stream
 	) -> None:
@@ -66,17 +64,23 @@ class SpreedClient:
 		self.sessionid = None
 
 		nc = NextcloudApp()
-		self._websopcketURL = os.environ["LT_HPB_URL"]
+		self._websopcket_url = os.environ["LT_HPB_URL"]
 		self._backendURL = nc.app_cfg.endpoint + '/ocs/v2.php/apps/spreed/api/v3/signaling/backend'
-		self.secret = auth_token
+		self.secret = os.environ["LT_INTERNAL_SECRET"]
 
 		self.room_token = room_token
-		self.hpb_location = hpb_location
 		self.hpb_settings = hpb_settings
 		self.stream_listener = stream_listener
 
 	async def connect(self):
-		self._server = await connect(self._websopcketURL)
+		nc = NextcloudApp()
+		websopcket_host = urlparse(self._websopcket_url).hostname
+		self._server = await connect(
+			self._websopcket_url,
+			server_hostname=websopcket_host,
+			ssl=nc.app_cfg.options.nc_cert,
+		)
+
 		await self.send_hello()
 		while True:
 			message = await self.receive()
@@ -172,11 +176,9 @@ class SpreedClient:
 			"message": {
 				"recipient": {
 					"type": "session",
-					# "sessionid": self.sessionid,
 					"sessionid": sender,
 				},
 				"data": {
-					# "to": self.sessionid,
 					"to": sender,
 					"type": "candidate",
 					"sid": offer_sid,
@@ -188,6 +190,21 @@ class SpreedClient:
 							"sdpMid": "0",
 						}
 					}
+				}
+			}
+		})
+
+	async def send_transcript(self, message: str, session_id: str):
+		await self.send_message({
+			"type": "message",
+			"message": {
+				"recipient": {
+					"type": "session",
+					"sessionid": session_id,
+				},
+				"data": {
+					"message": message,
+					"type": "transcript",
 				}
 			}
 		})
@@ -405,37 +422,18 @@ class Application:
 	def __init__(self, hpb_settings: HPBSettings):
 		self.hpb_settings = hpb_settings
 
-	async def join_call(self, room_token: str, auth_token: str, hpb_location: str) -> None:
+	async def join_call(self, req: TranscribeRequest) -> None:
 		"""Join a call."""
-		print(f"Joining call with room token: {room_token}, auth token: {auth_token}, hpb location: {hpb_location}")
+		print(f"Joining call with {req}")
 		# todo
-		self.spreedClients[room_token] = SpreedClient(room_token, auth_token, hpb_location, self.hpb_settings, self.stream_listener)
-		await self.spreedClients[room_token].connect()
+		self.spreedClients[req.roomToken] = SpreedClient(req.roomToken, self.hpb_settings, self.stream_listener)
+		await self.spreedClients[req.roomToken].connect()
 
 	async def send_chat_msg(self, room_token: str, message: str) -> None:
 		# todo: doesn't work
 		nc = AsyncNextcloudApp()
 		nc.set_user("admin")
 		await nc.talk.send_message(message, room_token, actor_display_name="Transcriber")
-
-		# import base64
-
-		# params = {
-		# 	"message": message,
-		# 	"actorDisplayName": "transcriber",
-		# 	"referenceId": hashlib.sha256("7a5de6443be1b885dbad887fad026aa2dbb3df299928ac2bad66bf9bacb62920".encode("UTF-8")).hexdigest(),
-		# 	"format": "json",
-		# }
-		# r = await self.client.post(f"{os.environ["NEXTCLOUD_URL2"]}/ocs/v2.php/apps/spreed/api/v1/chat/{room_token}", json=params, headers={
-		# 	"OCS-APIRequest": "true",
-		# 	# "Accept": "application/json",
-		# 	"content-type": "application/json",
-		# 	'Authorization': 'Basic ' + base64.b64encode(f'{os.environ['NC_USER']}:{os.environ['NC_PASS']}'.encode()).decode(),
-		# })
-		# if r.status_code // 100 != 2:
-		# 	print(f"Error sending chat message: {r.text}", tag='chat', color='red')
-		# else:
-		# 	print(f"Chat message sent: {message}", tag='chat', color='green')
 
 	def stream_listener(self, session_id: str, user_id: str, stream: AudioStream, room_token: str) -> None:
 		"""Handle incoming audio stream."""
