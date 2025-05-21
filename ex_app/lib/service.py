@@ -404,25 +404,30 @@ class AudioStream:
 		self.track.stop()
 
 
-def process_chunk(rec, message):
-	try:
-		res = rec.AcceptWaveform(message)
-	except Exception:
-		result = None
-	else:
-		if res > 0:
-			result = rec.Result()
-		else:
-			result = rec.PartialResult()
-	return result
-
-
 MODEL_MAP = {
 	"en": "vosk-model-en-us-0.22",
 	"de": "vosk-model-de-0.21",
 	"hi": "vosk-model-hi-0.22",
 }
 vosk_pool = concurrent.futures.ThreadPoolExecutor((os.cpu_count() or 1))
+import threading
+
+vosk_lock = threading.Lock()
+
+def process_chunk(recognizer: KaldiRecognizer, chunk: bytes) -> str | None:
+	try:
+		with vosk_lock:
+			res = recognizer.AcceptWaveform(chunk)
+			if res > 0:
+				# todo
+				# return recognizer.FinalResult()
+				return recognizer.Result()
+			return recognizer.PartialResult()
+			# return None
+	except Exception as e:
+		print("Error processing chunk", e, tag='vosk', color='red')
+		return None
+
 
 class VoskTranscriber:
 	def __init__(self, language: str):
@@ -466,23 +471,23 @@ class VoskTranscriber:
 
 				result = await loop.run_in_executor(vosk_pool, process_chunk, self.__recognizer, bytes(dataframes))
 
+				if not result:
+					continue
+
 				# todo
 				print(result, tag='vosk', color='green')
 
-				# try:
-				# 	json_msg = json.loads(result)
-				# except json.JSONDecodeError:
-				# 	print("Error decoding JSON message:", result, tag="vosk", color="red")
-				# 	continue
+				try:
+					json_msg = json.loads(result)
+				except json.JSONDecodeError:
+					print("Error decoding JSON message:", result, tag="vosk", color="red")
+					continue
 
-				# if "partial" in json_msg:
-				# 	return
+				message = json_msg.get("text", "")
+				if message == "":
+					continue
 
-				# message = json_msg["text"]
-				# if message == "":
-				# 	return
-
-				asyncio.create_task(text_listener(result))
+				asyncio.create_task(text_listener(message))
 		except StreamEndedException:
 			print("Stream ended", tag='stream', color='red')
 		except Exception as e:
@@ -499,7 +504,6 @@ class Application:
 		self.hpb_settings = hpb_settings
 
 	async def transcript_req(self, req: TranscribeRequest) -> None:
-		print(f"Joining call with {req}")
 		if req.roomToken in self.spreed_clients:
 			print(f"Already in call with room token: {req.roomToken}, adding target {req.sessionId}")
 			if req.enable:
@@ -528,7 +532,6 @@ class Application:
 			# partial(self.exit_room, req.roomToken),  # type: ignore[arg-type]
 		)
 		self.spreed_clients[req.roomToken].add_target(req.sessionId)
-		# todo: add reconnect logic with asyncio.create_task
 		asyncio.create_task(self.queue_consumer())
 		await self.spreed_clients[req.roomToken].connect()
 
