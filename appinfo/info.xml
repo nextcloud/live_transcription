@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<info>
+	<id>live_transcription</id>
+	<name>Live Transcription</name>
+	<summary>Provides live transcriptions to Talk calls.</summary>
+	<description>
+	<![CDATA[Provides live transcriptions to Talk calls. High-performance backend is required for this app to work.]]>
+	</description>
+	<version>1.0.0</version>
+	<licence>MIT</licence>
+	<namespace>LiveTranscription</namespace>
+	<category>tools</category>
+	<website>https://github.com/nextcloud/live_transcription</website>
+	<bugs>https://github.com/nextcloud/live_transcription/issues</bugs>
+	<repository type="git">https://github.com/nextcloud/live_transcription</repository>
+	<dependencies>
+		<nextcloud min-version="29" max-version="32"/>
+	</dependencies>
+	<external-app>
+		<docker-install>
+			<registry>ghcr.io</registry>
+			<image>nextcloud/live_transcription</image>
+			<image-tag>1.0.0</image-tag>
+		</docker-install>
+		<environment-variables>
+			<variable>
+				<name>LT_HPB_URL</name>
+				<display-name>High-performance backend URL</display-name>
+				<description>URL of the high-performance backend, same as the URL in the admin settings of Talk. This should support websockets.</description>
+			</variable>
+			<variable>
+				<name>LT_INTERNAL_SECRET</name>
+				<display-name>Internet secret of the high-performance backend</display-name>
+				<description>Secret used to authenticate the high-performance backend. This is not the same as the secret in the admin settings of Talk.</description>
+			</variable>
+		</environment-variables>
+		<routes>
+		</routes>
+	</external-app>
+</info>
