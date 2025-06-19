@@ -42,7 +42,7 @@ def report_100():
 
 @APP.post("/init")
 async def init_fn(bg: BackgroundTasks):
-    # download vosk en model
+    # todo: download vosk en model
     print("init_fn called", flush=True)
     bg.add_task(report_100)
     ...
