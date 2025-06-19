@@ -7,23 +7,26 @@ import hmac
 import json
 import os
 import pprint
-import random
+import threading
 from collections.abc import Callable
 from enum import IntEnum
 from functools import partial
+from secrets import token_urlsafe
 from threading import RLock
 from traceback import print_exc
-from typing import Any, Generator
+from typing import Any
 from urllib.parse import urlparse
 
 from aiortc import AudioStreamTrack, RTCPeerConnection, RTCSessionDescription
+from aiortc.mediastreams import MediaStreamError
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
+from av.audio.frame import AudioFrame
 from av.audio.resampler import AudioResampler
 from av.frame import Frame
 from dotenv import load_dotenv
 from livetypes import HPBSettings, StreamEndedException, Target, TranscribeRequest
-from nc_py_api import AsyncNextcloudApp, NextcloudApp
+from nc_py_api import NextcloudApp
 from nc_py_api.ex_app import persistent_storage
 from print_color import print
 from vosk import KaldiRecognizer, Model
@@ -109,7 +112,7 @@ class SpreedClient:
 		await self._server.send(json.dumps(message))
 
 	async def send_hello(self):
-		nonce = "" + str(random.random()) + "" + str(random.random())+ "" + str(random.random())
+		nonce = token_urlsafe(64)
 		await self.send_message({
 			"type": "hello",
 			"hello": {
@@ -131,13 +134,19 @@ class SpreedClient:
 			"internal": {
 				"type": "incall",
 				"incall": {
-					"incall": 1, # PARTICIPANT.CALL_FLAG.IN_CALL
+					"incall": CALL_FLAG.IN_CALL,
 				},
 			},
 		})
 
 	async def send_join(self):
-		await self.send_message({"type":"room","room":{"roomid": self.room_token,"sessionid": self.sessionid}})
+		await self.send_message({
+			"type": "room",
+			"room": {
+				"roomid": self.room_token,
+				"sessionid": self.sessionid
+			}
+		})
 
 	async def send_offer_request(self, publisher_session_id):
 		await self.send_message({
@@ -236,6 +245,8 @@ class SpreedClient:
 		if not self._server:
 			return None
 		message = json.loads(await self._server.recv())
+		# todo: debug message
+		# todo: add logger_config.yaml
 		# print('Message received:', tag='received_message', color='purple')
 		# pprint.pprint(message)
 		return message
@@ -271,17 +282,18 @@ class SpreedClient:
 				print("Connection closed", tag="connection", color="blue", flush=True)
 				# break
 
-			if message["type"] == "event" and message["event"]["target"] == "participants" and message["event"]["type"] == "update":
+			if (
+				message["type"] == "event"
+				and message["event"]["target"] == "participants"
+				and message["event"]["type"] == "update"
+			):
 				print("New participants update!", tag="participants", color="blue")
 				for user_description in message["event"]["update"]["users"]:
-					if user_description["inCall"] & CALL_FLAG.IN_CALL and user_description["inCall"] & CALL_FLAG.WITH_AUDIO:
+					if (
+						user_description["inCall"] & CALL_FLAG.IN_CALL
+						and user_description["inCall"] & CALL_FLAG.WITH_AUDIO
+					):
 						print("User join with audio", user_description, tag="participants", color="blue")
-						# targets[user_description["sessionId"]] = Target(
-						# 	session_id=user_description["sessionId"],
-						# 	raw_message=user_description,
-						# 	in_call=True,
-						# 	muted=True
-						# )
 						await self.send_offer_request(user_description["sessionId"])
 
 			if message["type"] == "message" and message["message"]["data"]["type"] == "offer":
@@ -327,13 +339,16 @@ class SpreedClient:
 			pc=pc,
 		)
 
-		await pc.setRemoteDescription(RTCSessionDescription(type="offer", sdp=message["message"]["data"]["payload"]["sdp"]))
+		await pc.setRemoteDescription(
+			RTCSessionDescription(type="offer", sdp=message["message"]["data"]["payload"]["sdp"])
+		)
 
 		answer = await pc.createAnswer()
 		await pc.setLocalDescription(answer)
 		await self.send_offer_answer(message["message"]["data"]["from"], message["message"]["data"]["sid"], answer.sdp)
 
 		local_sdp = pc.localDescription.sdp
+		# todo
 		# print('local sdp:', local_sdp, tag='sdp', color='blue')
 
 		for line in local_sdp.splitlines():
@@ -362,13 +377,11 @@ class AudioStream:
 			print("Track ended", tag="track", color="magenta")
 			self._ended = True
 
-	# async def receive(self) -> Generator[Frame]:
-	async def receive(self) -> Frame:
+	async def receive(self) -> AudioFrame:
 		"""Receive the next audio frame."""
 		if self._ended:
 			raise StreamEndedException("Track has ended")
-		# yield await self.track.recv()
-		return await self.track.recv()
+		return await self.track.recv()  # type: ignore[return-value]
 
 	def stop(self):
 		"""Stop the audio stream."""
@@ -380,9 +393,7 @@ MODEL_MAP = {
 	"de": "vosk-model-de-0.21",
 	"hi": "vosk-model-hi-0.22",
 }
-vosk_pool = concurrent.futures.ThreadPoolExecutor((os.cpu_count() or 1))
-import threading
-
+vosk_pool = concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 1)
 vosk_lock = threading.Lock()
 
 def process_chunk(recognizer: KaldiRecognizer, chunk: bytes) -> str | None:
@@ -403,7 +414,7 @@ def process_chunk(recognizer: KaldiRecognizer, chunk: bytes) -> str | None:
 class VoskTranscriber:
 	def __init__(self, language: str):
 		self.__resampler = AudioResampler(format="s16", layout="mono", rate=48000)
-		self.__audio_task: dict[str, asyncio.Task] = None
+		self.__audio_task: dict[str, asyncio.Task] = {}
 		# todo
 		# model = Model(model_name=MODEL_MAP[language])
 		model = Model("../../persistent_storage/vosk-model-en-us-0.22")
@@ -413,11 +424,11 @@ class VoskTranscriber:
 		self.__audio_task[session_id] = asyncio.create_task(self.__run_audio_xfer(stream, text_listener))
 		self.__audio_task[session_id].add_done_callback(partial(self.stop, session_id))
 
-	async def stop(self, session_id: str):
+	async def stop(self, session_id: str, _future):
 		print("Stopping audio task", tag="vosk", color="red", flush=True)
 		if self.__audio_task[session_id] is not None:
 			self.__audio_task[session_id].cancel()
-			self.__audio_task[session_id] = None
+			del self.__audio_task[session_id]
 
 	async def __run_audio_xfer(self, stream: AudioStream, text_listener: Callable[[str], None]):
 		loop = asyncio.get_running_loop()
@@ -425,7 +436,6 @@ class VoskTranscriber:
 		max_frames = 20
 		frames = []
 		try:
-			# async for fr in stream.receive():
 			while True:
 				fr = await stream.receive()
 				frames.append(fr)
@@ -461,6 +471,9 @@ class VoskTranscriber:
 				asyncio.create_task(text_listener(message))
 		except StreamEndedException:
 			print("Stream ended", tag="stream", color="red")
+		except MediaStreamError:
+			print("Audio stream is not live", tag="stream", color="red")
+			print_exc()
 		except Exception as e:
 			print("Error in transcriber", e, tag="transcriber", color="red")
 			print_exc()
