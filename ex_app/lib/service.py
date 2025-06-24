@@ -8,7 +8,7 @@ import json
 import os
 import pprint
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from enum import IntEnum
 from functools import partial
 from secrets import token_urlsafe
@@ -30,11 +30,14 @@ from nc_py_api import NextcloudApp
 from nc_py_api.ex_app import persistent_storage
 from print_color import print
 from vosk import KaldiRecognizer, Model
-from websockets import connect
+from websockets import ClientConnection, connect
 from websockets.exceptions import ConnectionClosedOK
 
 load_dotenv()
 # os.environ['VOSK_MODEL_PATH'] = persistent_storage()
+
+MSG_RECEIVE_TIMEOUT = 10  # seconds
+MAX_CONNECT_TRIES = 5  # maximum number of connection attempts
 
 class CALL_FLAG(IntEnum):
 	DISCONNECTED = 0
@@ -42,6 +45,12 @@ class CALL_FLAG(IntEnum):
 	WITH_AUDIO   = 2
 	WITH_VIDEO   = 4
 	WITH_PHONE   = 8
+
+
+class ConnectResult(IntEnum):
+	SUCCESS = 0
+	FAILURE = 1  # do not retry
+	RETRY   = 2
 
 
 def hmac_sha256(key, message):
@@ -61,8 +70,8 @@ class SpreedClient:
 		stream_listener: Callable[[str, Any, str], None], # session_id, stream, room_token
 	) -> None:
 		self.id = 0
-		self._server = None
-		self._monitor = None
+		self._server: ClientConnection | None = None
+		self._monitor: asyncio.Task | None = None
 		self.peer_connections: dict[str, PeerConnection] = {}
 		self.targets: dict[str, Target] = {}
 		self.target_lock = RLock()
@@ -80,31 +89,65 @@ class SpreedClient:
 		self.hpb_settings = hpb_settings
 		self.stream_listener = stream_listener
 
-	async def connect(self):
+
+	async def connect(self) -> ConnectResult:
 		nc = NextcloudApp()
 		websopcket_host = urlparse(self._websopcket_url).hostname
-		self._server = await connect(
-			self._websopcket_url,
-			server_hostname=websopcket_host,
-			ssl=nc.app_cfg.options.nc_cert,
-		)
+		if nc.app_cfg.options.nc_cert is False:
+			self._server = await connect(self._websopcket_url)
+		else:
+			self._server = await connect(
+				self._websopcket_url,
+				server_hostname=websopcket_host,
+				ssl=nc.app_cfg.options.nc_cert,
+			)
 
 		await self.send_hello()
+
+		msg_counter = 0
 		while True:
-			message = await self.receive()
-			if message["type"] == "welcome":
+			message = await self.receive(MSG_RECEIVE_TIMEOUT)
+			if message is None:
+				print(f"No message received for {MSG_RECEIVE_TIMEOUT} secs, aborting...", tag="connection", color="red")
+				return ConnectResult.FAILURE
+
+			if message.get("type") == "error":
+				print(
+					"Error message received:", message.get("error", {}).get("message"),
+					"\nError details:", message.get("error", {}).get("details"),
+					tag="connection",
+					color="red",
+				)
+				return ConnectResult.FAILURE
+
+			if message.get("type") == "bye":
+				print("Received bye message, closing connection", tag="connection", color="blue")
+				return ConnectResult.FAILURE
+
+			if message.get("type") == "welcome":
 				continue
-			if message["type"] == "hello":
+
+			if message.get("type") == "hello":
 				self.sessionid = message["hello"]["sessionid"]
 				self.resumeid = message["hello"]["resumeid"]
 				break
+
+			if msg_counter > 10:
+				print("Too many messages received without 'welcome', reconnecting...", tag="connection", color="red")
+				return ConnectResult.RETRY
+
 		self._monitor = asyncio.create_task(self.signalling_monitor())
 		# self._transcript_sender = asyncio.create_task(self.transcript_sender())
 		await self.send_incall()
 		await self.send_join()
 		print("Connected to signaling server")
+		return ConnectResult.SUCCESS
 
 	async def send_message(self, message: dict):
+		if not self._server:
+			print("No server connection, cannot send message", tag="connection", color="red")
+			return
+
 		self.id += 1
 		message["id"] = str(self.id)
 		# print('Message sent:', tag='sent_message', color='green', flush=True)
@@ -209,6 +252,12 @@ class SpreedClient:
 			}
 		})
 
+	async def send_bye(self):
+		await self.send_message({
+			"type": "bye",
+			"bye": {}
+		})
+
 	async def send_transcript(self, message: str, spk_session_id: str):
 		# todo
 		print("speaker session id:", spk_session_id, tag="vosk", color="green")
@@ -230,25 +279,49 @@ class SpreedClient:
 				}
 			})
 
-	async def close(self):
-		await self.send_message({
-			"type": "bye",
-			"bye": {},
-		})
-		if self._monitor:
+	async def close(self, using_resume: bool = False):
+		await self.send_bye()
+
+		if not using_resume:
+			for pc in self.peer_connections.values():
+				if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
+					print(f"Closing peer connection for session {pc.session_id}", tag="connection", color="blue")
+					await pc.pc.close()
+			self.peer_connections.clear()
+			self.resumeid = None
+			self.sessionid = None
+
+		if self._monitor and not self._monitor.done():
+			print("Cancelling monitor task", tag="monitor", color="red")
+			# Cancel the monitor task if it's still running
 			self._monitor.cancel()
 			self._monitor = None
-		await self._server.close()
-		self._server = None
 
-	async def receive(self):
+		if self._server:
+			print("Closing server connection", tag="connection", color="red")
+			# Close the WebSocket connection if it's still open
+			await self._server.close()
+			self._server = None
+
+	async def receive(self, timeout: int = 0) -> dict | None:
 		if not self._server:
 			return None
-		message = json.loads(await self._server.recv())
+
+		# todo: handle exceptions
+		if timeout > 0:
+			try:
+				received_msg = await asyncio.wait_for(self._server.recv(), timeout)
+			except TimeoutError:
+				print("Timeout while waiting for message", tag="timeout", color="red")
+				return None
+		else:
+			received_msg = await self._server.recv()
+
+		message = json.loads(received_msg)
 		# todo: debug message
 		# todo: add logger_config.yaml
-		# print('Message received:', tag='received_message', color='purple')
-		# pprint.pprint(message)
+		print("Message received:", tag="received_message", color="purple")
+		pprint.pprint(message)
 		return message
 
 	def add_target(self, session_id: str):
@@ -282,23 +355,58 @@ class SpreedClient:
 				print("Connection closed", tag="connection", color="blue", flush=True)
 				# break
 
+			if message.get("type") == "error":
+				print(
+					"Error message received:", message.get("error", {}).get("message"),
+					"\nError details:", message.get("error", {}).get("details"),
+					tag="connection",
+					color="red",
+				)
+				asyncio.get_event_loop().call_soon_threadsafe(self.close)
+				return
+
 			if (
 				message["type"] == "event"
 				and message["event"]["target"] == "participants"
 				and message["event"]["type"] == "update"
 			):
-				print("New participants update!", tag="participants", color="blue")
-				for user_description in message["event"]["update"]["users"]:
+				print("Participants update!", tag="participants", color="blue")
+				if message["event"]["update"].get("all") and message["event"]["update"].get("incall") == 0:
+					print("Call ended for everyone, closing connection", tag="participants", color="red")
+					asyncio.get_event_loop().call_soon_threadsafe(self.close)
+					return
+
+				users_update = message["event"]["update"].get("users", [])
+				if not users_update:
+					continue
+
+				for user_desc in users_update:
+					if (user_desc["inCall"] & CALL_FLAG.IN_CALL and user_desc["inCall"] & CALL_FLAG.WITH_AUDIO):
+						print("User join with audio", user_desc, tag="participants", color="blue")
+						await self.send_offer_request(user_desc["sessionId"])
+						continue
+
+				# the last user just left the call, live_transcription is the only one left
+				if (len(users_update) == 2):
 					if (
-						user_description["inCall"] & CALL_FLAG.IN_CALL
-						and user_description["inCall"] & CALL_FLAG.WITH_AUDIO
+						users_update[0].get("sessionId") != self.sessionid
+						and users_update[1].get("sessionId") != self.sessionid
 					):
-						print("User join with audio", user_description, tag="participants", color="blue")
-						await self.send_offer_request(user_description["sessionId"])
+						# false alarm, we are not the only one left
+						continue
+
+					transcriber_index = 0 if users_update[0].get("sessionId") == self.sessionid else 1
+					if (
+						users_update[transcriber_index].get("inCall") & CALL_FLAG.IN_CALL
+						and users_update[transcriber_index^1].get("inCall") == CALL_FLAG.DISCONNECTED
+					):
+						asyncio.get_event_loop().call_soon_threadsafe(self.close)
+						return
 
 			if message["type"] == "message" and message["message"]["data"]["type"] == "offer":
 				print("Got offer from", message["message"]["sender"]["sessionid"], tag="offer", color="blue")
 				await self.handle_offer(message)
+				continue
 
 			if message["type"] == "message" and message["message"]["data"]["type"] == "candidate":
 				print("Got candidate", tag="candidate", color="blue")
@@ -306,8 +414,11 @@ class SpreedClient:
 				candidate.sdpMid = message["message"]["data"]["payload"]["candidate"]["sdpMid"]
 				candidate.sdpMLineIndex = message["message"]["data"]["payload"]["candidate"]["sdpMLineIndex"]
 				await self.peer_connections[message["message"]["sender"]["sessionid"]].pc.addIceCandidate(candidate)
+				continue
 
-			# todo: handle bye message
+			if message["type"] == "bye":
+				print("Received bye message, closing connection", tag="bye", color="blue")
+				asyncio.get_event_loop().call_soon_threadsafe(self.close)
 
 	async def handle_offer(self, message):
 		"""Handle incoming offer messages."""
@@ -333,8 +444,6 @@ class SpreedClient:
 				stream = AudioStream(track)
 				self.stream_listener(message["message"]["sender"]["sessionid"], stream, self.room_token)
 		self.peer_connections[message["message"]["sender"]["sessionid"]] = PeerConnection(
-			# todo
-			user_id="dummy",
 			session_id=message["message"]["sender"]["sessionid"],
 			pc=pc,
 		)
@@ -361,8 +470,7 @@ class SpreedClient:
 
 
 class PeerConnection:
-	def __init__(self, user_id: str, session_id: str, pc: RTCPeerConnection):
-		self.user_id = user_id
+	def __init__(self, session_id: str, pc: RTCPeerConnection):
 		self.session_id = session_id
 		self.pc = pc
 
@@ -413,24 +521,32 @@ def process_chunk(recognizer: KaldiRecognizer, chunk: bytes) -> str | None:
 
 class VoskTranscriber:
 	def __init__(self, language: str):
+		self.__text_listener_tasks: set[asyncio.Task] = set()
 		self.__resampler = AudioResampler(format="s16", layout="mono", rate=48000)
 		self.__audio_task: dict[str, asyncio.Task] = {}
 		# todo
 		# model = Model(model_name=MODEL_MAP[language])
-		model = Model("../../persistent_storage/vosk-model-en-us-0.22")
+		model = Model("../../persistent_storage/vosk-model-en-us-0.22-lgraph")
 		self.__recognizer = KaldiRecognizer(model, 48000)
 
-	async def start(self, session_id: str, stream: AudioStream, text_listener: Callable[[str], None]):
+	async def start(
+		self,
+		session_id: str,
+		stream: AudioStream,
+		text_listener: Callable[[str], Coroutine[Any, Any, None]]
+	):
 		self.__audio_task[session_id] = asyncio.create_task(self.__run_audio_xfer(stream, text_listener))
-		self.__audio_task[session_id].add_done_callback(partial(self.stop, session_id))
+		self.__audio_task[session_id].add_done_callback(partial(self.stop, stream, session_id))
 
-	async def stop(self, session_id: str, _future):
-		print("Stopping audio task", tag="vosk", color="red", flush=True)
+	def stop(self, stream: AudioStream, session_id: str, future: asyncio.Future):
+		print("Stopping audio task for session_id: " + session_id, tag="vosk", color="red", flush=True)
 		if self.__audio_task[session_id] is not None:
+			stream.stop()
+			future.cancel("Cancelling audio task in VoskTranscriber for session_id: " + session_id)
 			self.__audio_task[session_id].cancel()
 			del self.__audio_task[session_id]
 
-	async def __run_audio_xfer(self, stream: AudioStream, text_listener: Callable[[str], None]):
+	async def __run_audio_xfer(self, stream: AudioStream, text_listener: Callable[[str], Coroutine[Any, Any, None]]):
 		loop = asyncio.get_running_loop()
 
 		max_frames = 20
@@ -468,24 +584,25 @@ class VoskTranscriber:
 				if message == "":
 					continue
 
-				asyncio.create_task(text_listener(message))
+				task: asyncio.Task = asyncio.create_task(text_listener(message))
+				self.__text_listener_tasks.add(task)
+				task.add_done_callback(self.__text_listener_tasks.discard)
 		except StreamEndedException:
 			print("Stream ended", tag="stream", color="red")
 		except MediaStreamError:
 			print("Audio stream is not live", tag="stream", color="red")
-			print_exc()
 		except Exception as e:
 			print("Error in transcriber", e, tag="transcriber", color="red")
 			print_exc()
 
 
 class Application:
-	spreed_clients: dict[str, SpreedClient] = {}
-	transcribers: dict[str, VoskTranscriber] = {}
-	transcript_queue: asyncio.Queue = asyncio.Queue()
-
 	def __init__(self, hpb_settings: HPBSettings):
 		self.hpb_settings = hpb_settings
+		self.spreed_clients: dict[str, SpreedClient] = {}
+		self.transcribers: dict[str, VoskTranscriber] = {}
+		self.transcript_queue: asyncio.Queue = asyncio.Queue()
+		self.queue_consumers: set[asyncio.Task] = set()
 
 	async def transcript_req(self, req: TranscribeRequest) -> None:
 		if req.roomToken in self.spreed_clients:
@@ -516,8 +633,55 @@ class Application:
 			# partial(self.exit_room, req.roomToken),  # type: ignore[arg-type]
 		)
 		self.spreed_clients[req.roomToken].add_target(req.sessionId)
-		asyncio.create_task(self.queue_consumer())
-		await self.spreed_clients[req.roomToken].connect()
+
+		task: asyncio.Task = asyncio.create_task(self.queue_consumer())
+		self.queue_consumers.add(task)
+		task.add_done_callback(self.queue_consumers.discard)
+
+		tries = MAX_CONNECT_TRIES
+		while tries > 0:
+			try:
+				conn_result = await self.spreed_clients[req.roomToken].connect()
+				match conn_result:
+					case ConnectResult.SUCCESS:
+						print(
+							f"Connected to signaling server for room token: {req.roomToken}",
+							tag="connection",
+							color="green",
+						)
+						return
+					case ConnectResult.FAILURE:
+						# do not retry
+						print(
+							f"(try: {MAX_CONNECT_TRIES + 1 - tries}) "
+							f"Failed to connect to signaling server for room token: {req.roomToken}",
+							tag="connection",
+							color="red",
+						)
+						await self.spreed_clients[req.roomToken].close()
+						del self.spreed_clients[req.roomToken]
+						return
+					case ConnectResult.RETRY:
+						print(
+							f"(try: {MAX_CONNECT_TRIES + 1 - tries}) "
+							f"Retrying connection to signaling server for room token: {req.roomToken}",
+							tag="connection",
+							color="yellow",
+						)
+						await self.spreed_clients[req.roomToken].close(using_resume=True)
+				tries -= 1
+				await asyncio.sleep(2)
+			except Exception as e:
+				print(
+					f"(try: {MAX_CONNECT_TRIES + 1 - tries}) "
+					f"Error connecting to signaling server for room token {req.roomToken}: {e}",
+					tag="connection",
+					color="red",
+				)
+				tries -= 1
+				await asyncio.sleep(2)
+
+		print(f"Failed to connect after {MAX_CONNECT_TRIES} attempts, giving up", tag="connection", color="red")
 
 	async def on_transcript(self, room_token: str, spk_session_id: str, message: str):
 		sclient = self.spreed_clients.get(room_token)
@@ -528,6 +692,7 @@ class Application:
 
 	async def queue_consumer(self):
 		while True:
+			# todo: make this scale
 			coroutine = await self.transcript_queue.get()
 			if coroutine is None:
 				# our task is done
