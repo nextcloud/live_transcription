@@ -1,13 +1,11 @@
 """Service module."""
 
 import asyncio
-import concurrent
 import hashlib
 import hmac
 import json
 import os
 import pprint
-import threading
 from collections.abc import Callable, Coroutine
 from enum import IntEnum
 from functools import partial
@@ -23,21 +21,19 @@ from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 from av.audio.frame import AudioFrame
 from av.audio.resampler import AudioResampler
-from av.frame import Frame
 from dotenv import load_dotenv
 from livetypes import HPBSettings, StreamEndedException, Target, TranscribeRequest
 from nc_py_api import NextcloudApp
-from nc_py_api.ex_app import persistent_storage
 from print_color import print
-from vosk import KaldiRecognizer, Model
 from websockets import ClientConnection, connect
 from websockets.exceptions import ConnectionClosedOK
 
 load_dotenv()
-# os.environ['VOSK_MODEL_PATH'] = persistent_storage()
 
 MSG_RECEIVE_TIMEOUT = 10  # seconds
 MAX_CONNECT_TRIES = 5  # maximum number of connection attempts
+MAX_AUDIO_FRAMES = 20  # maximum number of audio frames to collect before sending to Vosk
+
 
 class CALL_FLAG(IntEnum):
 	DISCONNECTED = 0
@@ -362,6 +358,7 @@ class SpreedClient:
 					tag="connection",
 					color="red",
 				)
+				# todo: only close if the error is not recoverable
 				asyncio.get_event_loop().call_soon_threadsafe(self.close)
 				return
 
@@ -496,38 +493,13 @@ class AudioStream:
 		self.track.stop()
 
 
-MODEL_MAP = {
-	"en": "vosk-model-en-us-0.22",
-	"de": "vosk-model-de-0.21",
-	"hi": "vosk-model-hi-0.22",
-}
-vosk_pool = concurrent.futures.ThreadPoolExecutor(os.cpu_count() or 1)
-vosk_lock = threading.Lock()
-
-def process_chunk(recognizer: KaldiRecognizer, chunk: bytes) -> str | None:
-	try:
-		with vosk_lock:
-			res = recognizer.AcceptWaveform(chunk)
-			if res > 0:
-				# todo
-				# return recognizer.FinalResult()
-				return recognizer.Result()
-			return recognizer.PartialResult()
-			# return None
-	except Exception as e:
-		print("Error processing chunk", e, tag="vosk", color="red")
-		return None
-
-
 class VoskTranscriber:
 	def __init__(self, language: str):
 		self.__text_listener_tasks: set[asyncio.Task] = set()
 		self.__resampler = AudioResampler(format="s16", layout="mono", rate=48000)
 		self.__audio_task: dict[str, asyncio.Task] = {}
-		# todo
-		# model = Model(model_name=MODEL_MAP[language])
-		model = Model("../../persistent_storage/vosk-model-en-us-0.22-lgraph")
-		self.__recognizer = KaldiRecognizer(model, 48000)
+		self.__language = language
+		self.__server_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
 
 	async def start(
 		self,
@@ -539,25 +511,42 @@ class VoskTranscriber:
 		self.__audio_task[session_id].add_done_callback(partial(self.stop, stream, session_id))
 
 	def stop(self, stream: AudioStream, session_id: str, future: asyncio.Future):
-		print("Stopping audio task for session_id: " + session_id, tag="vosk", color="red", flush=True)
-		if self.__audio_task[session_id] is not None:
+		if session_id in self.__audio_task:
+			print("Stopping audio task for session_id: " + session_id, tag="vosk", color="red", flush=True)
 			stream.stop()
 			future.cancel("Cancelling audio task in VoskTranscriber for session_id: " + session_id)
 			self.__audio_task[session_id].cancel()
 			del self.__audio_task[session_id]
 
 	async def __run_audio_xfer(self, stream: AudioStream, text_listener: Callable[[str], Coroutine[Any, Any, None]]):
-		loop = asyncio.get_running_loop()
-
-		max_frames = 20
 		frames = []
 		try:
+			voskcon: ClientConnection = await connect(self.__server_url)
+			await voskcon.send(
+				json.dumps({
+					"config": {
+						"sample_rate": 48000,
+						"language": self.__language,  # todo: get language from stream/ocs
+						# "show_words": True,
+					}
+				})
+			)
+		except Exception as e:
+			print("Error connecting to Vosk server. Cannot continue further.", e, tag="vosk", color="red")
+			# todo: close the stream and cancel the task, close the HPB connection too
+			return
+
+		try:
+			# todo
+			from time import perf_counter
 			while True:
 				fr = await stream.receive()
+				# todo
+				start = perf_counter()
 				frames.append(fr)
 
 				# We need to collect frames so we don't send partial results too often
-				if len(frames) < max_frames:
+				if len(frames) < MAX_AUDIO_FRAMES:
 					continue
 
 				dataframes = bytearray(b"")
@@ -566,13 +555,15 @@ class VoskTranscriber:
 						dataframes += bytes(rfr.planes[0])[:rfr.samples * 2]
 				frames.clear()
 
-				result = await loop.run_in_executor(vosk_pool, process_chunk, self.__recognizer, bytes(dataframes))
+				await voskcon.send(bytes(dataframes))
+				result = await voskcon.recv()
+				end = perf_counter()
 
 				if not result:
 					continue
 
 				# todo
-				print(result, tag="vosk", color="green")
+				print(result, tag=f"vosk {end - start:.2f}", color="green")
 
 				try:
 					json_msg = json.loads(result)
@@ -594,6 +585,14 @@ class VoskTranscriber:
 		except Exception as e:
 			print("Error in transcriber", e, tag="transcriber", color="red")
 			print_exc()
+		finally:
+			print("Closing Vosk connection", tag="vosk", color="red")
+			await voskcon.send('{"eof" : 1}')
+			await voskcon.close()
+			for task in self.__text_listener_tasks:
+				task.cancel("Cancelling text listener task in VoskTranscriber")
+			self.__text_listener_tasks.clear()
+			print("VoskTranscriber stopped", tag="vosk", color="green")
 
 
 class Application:
@@ -629,8 +628,6 @@ class Application:
 			# self.transcript_queues[req.roomToken],
 			self.hpb_settings,
 			self.stream_listener,
-			# todo: verify if this works
-			# partial(self.exit_room, req.roomToken),  # type: ignore[arg-type]
 		)
 		self.spreed_clients[req.roomToken].add_target(req.sessionId)
 
@@ -719,6 +716,7 @@ class Application:
 		)
 		print(f"Started transcriber for {session_id} in {language}")
 
+
 def check_hpb_env_vars():
 	# Check if the required environment variables are set
 	required_vars = ("LT_HPB_URL", "LT_INTERNAL_SECRET")
@@ -730,6 +728,17 @@ def check_hpb_env_vars():
 	hpb_url_host = urlparse(hpb_url).hostname
 	if not hpb_url_host:
 		raise ValueError(f"Invalid HPB URL: {hpb_url}")
+
+	vosk_url = os.environ.get("LT_VOSK_SERVER_URL")
+	if vosk_url:
+		vosk_url_parsed = urlparse(vosk_url)
+		vosk_host = vosk_url_parsed.hostname
+		if not vosk_host:
+			raise ValueError(f"Invalid VOSK server URL: {vosk_url}")
+		try:
+			_ = vosk_url_parsed.port
+		except ValueError as e:
+			raise ValueError(f"Invalid VOSK server URL: {vosk_url}") from e
 
 
 def get_hpb_settings() -> HPBSettings:
