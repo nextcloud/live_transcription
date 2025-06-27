@@ -33,6 +33,16 @@
 				<display-name>Internet secret of the high-performance backend</display-name>
 				<description>Secret used to authenticate the high-performance backend. This is not the same as the secret in the admin settings of Talk.</description>
 			</variable>
+			<variable>
+				<name>LT_VOSK_SERVER_URL</name>
+				<display-name>URL of the Vosk Server</display-name>
+				<description>Audio is sent to this server for transcription. It should be of the form "ws://localhost:2702". The internal Vosk server will also listen on this interface and port if enabled.</description>
+			</variable>
+			<variable>
+				<name>LT_DISABLE_INTERNAL_VOSK</name>
+				<display-name>Disable the internal Vosk server</display-name>
+				<description>"LT_VOSK_SERVER_URL" should point to a functioning Vosk server in this case. Accepted values are "1", "0", "true", "false".</description>
+			</variable>
 		</environment-variables>
 		<routes>
 		</routes>

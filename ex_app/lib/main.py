@@ -30,6 +30,7 @@ async def lifespan(app: FastAPI):
 APP = FastAPI(lifespan=lifespan)
 # APP.add_middleware(AppAPIAuthMiddleware)  # set global AppAPI authentication middleware
 
+# todo: add control of supervisord processes and also expose them via API
 
 @APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest, bg: BackgroundTasks):
@@ -42,7 +43,7 @@ def report_100():
 
 @APP.post("/init")
 async def init_fn(bg: BackgroundTasks):
-    # todo: download vosk en model
+    # todo: download vosk en model and restart the vosk server
     print("init_fn called", flush=True)
     bg.add_task(report_100)
     ...
