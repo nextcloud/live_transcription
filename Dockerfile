@@ -37,7 +37,7 @@ FROM python:3.12-slim-bookworm
 COPY --from=builder /usr/local/ /usr/local/
 
 # Install any runtime apt packages your app needs.
-RUN apt-get update && apt-get install -y curl procps && \
+RUN apt-get update && apt-get install -y curl procps supervisor && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Add application files.
@@ -50,8 +50,10 @@ ADD /ex_app/li[b] /ex_app/lib
 # Copy scripts with the proper permissions.
 COPY --chmod=775 healthcheck.sh /
 COPY --chmod=775 start.sh /
+COPY --chmod=644 supervisord.conf /etc/supervisor/supervisord.conf
 
 # Set working directory and define entrypoint/healthcheck.
 WORKDIR /ex_app/lib
-ENTRYPOINT ["/start.sh", "python3", "main.py"]
-HEALTHCHECK --interval=2s --timeout=2s --retries=300 CMD /healthcheck.sh
+ENTRYPOINT ["/start.sh", "supervisord", "-c", "/etc/supervisor/supervisord.conf"]
+# todo: add healthchecks for the app and vosk server
+HEALTHCHECK --interval=20s --timeout=2s --retries=300 CMD /healthcheck.sh

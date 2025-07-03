@@ -2,8 +2,10 @@
 
 if [ -f /frpc.toml ] && [ -n "$HP_SHARED_KEY" ]; then
   if pgrep -x "frpc" > /dev/null; then
-      exit 0
+    exit 0
   else
-      exit 1
+    exit 1
   fi
 fi
+
+# todo: app and vosk server health checks
