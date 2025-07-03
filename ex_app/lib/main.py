@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
 from nc_py_api import NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, run_app, set_handlers
-from service import Application, check_hpb_env_vars, get_hpb_settings
+from service import Application
 
 load_dotenv()
 application: Application
@@ -21,9 +21,7 @@ application: Application
 async def lifespan(app: FastAPI):
     global application
     set_handlers(app, enabled_handler, default_init=False)
-    check_hpb_env_vars()
-    hpb_settings = get_hpb_settings()
-    application = Application(hpb_settings)
+    application = Application()
     yield
 
 

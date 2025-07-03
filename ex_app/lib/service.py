@@ -596,8 +596,8 @@ class VoskTranscriber:
 
 
 class Application:
-	def __init__(self, hpb_settings: HPBSettings):
-		self.hpb_settings = hpb_settings
+	def __init__(self) -> None:
+		self.hpb_settings = get_hpb_settings()
 		self.spreed_clients: dict[str, SpreedClient] = {}
 		self.transcribers: dict[str, VoskTranscriber] = {}
 		self.transcript_queue: asyncio.Queue = asyncio.Queue()
@@ -727,14 +727,20 @@ def check_hpb_env_vars():
 	hpb_url = os.environ["LT_HPB_URL"]
 	hpb_url_host = urlparse(hpb_url).hostname
 	if not hpb_url_host:
-		raise ValueError(f"Invalid HPB URL: {hpb_url}")
+		raise ValueError(
+			f"Could not detect hostname in LT_HPB_URL env var: {hpb_url}. "
+			"Verify that it is a valid URL with a protocol and hostname."
+		)
 
 	vosk_url = os.environ.get("LT_VOSK_SERVER_URL")
 	if vosk_url:
 		vosk_url_parsed = urlparse(vosk_url)
 		vosk_host = vosk_url_parsed.hostname
 		if not vosk_host:
-			raise ValueError(f"Invalid VOSK server URL: {vosk_url}")
+			raise ValueError(
+				f"Could not detect hostname in LT_VOSK_SERVER_URL: {vosk_url}. "
+				"Verify that it is a valid URL with a protocol and hostname."
+			)
 		try:
 			_ = vosk_url_parsed.port
 		except ValueError as e:
@@ -742,6 +748,7 @@ def check_hpb_env_vars():
 
 
 def get_hpb_settings() -> HPBSettings:
+	check_hpb_env_vars()
 	try:
 		nc = NextcloudApp()
 		settings = nc.ocs("GET", "/ocs/v2.php/apps/spreed/api/v3/signaling/settings")
