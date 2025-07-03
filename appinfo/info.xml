@@ -43,6 +43,11 @@
 				<display-name>Disable the internal Vosk server</display-name>
 				<description>"LT_VOSK_SERVER_URL" should point to a functioning Vosk server in this case. Accepted values are "1", "0", "true", "false".</description>
 			</variable>
+			<variable>
+				<name>SKIP_CERT_VERIFY</name>
+				<display-name>Skip SSL certificate verification</display-name>
+				<description>When set to "true", certificate verifications will ke skipped for the websocket connections to the HPB.</description>
+			</variable>
 		</environment-variables>
 		<routes>
 		</routes>

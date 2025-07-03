@@ -6,6 +6,7 @@ import hmac
 import json
 import os
 import pprint
+import ssl
 from collections.abc import Callable, Coroutine
 from enum import IntEnum
 from functools import partial
@@ -57,6 +58,30 @@ def hmac_sha256(key, message):
 	).hexdigest()
 
 
+def get_ssl_context(server_addr: str) -> ssl.SSLContext | None:
+	nc = NextcloudApp()
+
+	if server_addr.startswith("ws://"):
+		print("Using default SSL context for insecure WebSocket connection (ws://)", tag="connection", color="blue")
+		return None
+
+	if os.environ.get("SKIP_CERT_VERIFY", "false").lower() == "true":
+		print("Skipping certificate verification for WebSocket connection", tag="connection", color="blue")
+		ssl_ctx = ssl.SSLContext()
+		ssl_ctx.check_hostname = False
+		ssl_ctx.verify_mode = ssl.CERT_NONE
+		return ssl_ctx
+
+	if nc.app_cfg.options.nc_cert and isinstance(nc.app_cfg.options.nc_cert, ssl.SSLContext):
+		# Use the SSL context provided by nc_py_api
+		print("Using SSL context provided by nc_py_api", tag="connection", color="blue")
+		return nc.app_cfg.options.nc_cert
+
+	# verify certificate normally and don't use SSLContext from nc_py_api
+	print("Using default SSL context for WebSocket connection", tag="connection", color="blue")
+	return None
+
+
 class SpreedClient:
 	def __init__(
 		self,
@@ -87,16 +112,15 @@ class SpreedClient:
 
 
 	async def connect(self) -> ConnectResult:
-		nc = NextcloudApp()
 		websopcket_host = urlparse(self._websopcket_url).hostname
-		if nc.app_cfg.options.nc_cert is False:
-			self._server = await connect(self._websopcket_url)
-		else:
-			self._server = await connect(
-				self._websopcket_url,
-				server_hostname=websopcket_host,
-				ssl=nc.app_cfg.options.nc_cert,
-			)
+		ssl_ctx = get_ssl_context(self._websopcket_url)
+		self._server = await connect(
+			self._websopcket_url,
+			*({
+				"server_hostname": websopcket_host,
+				"ssl": ssl_ctx,
+			} if ssl_ctx else {}),
+		)
 
 		await self.send_hello()
 
@@ -521,7 +545,14 @@ class VoskTranscriber:
 	async def __run_audio_xfer(self, stream: AudioStream, text_listener: Callable[[str], Coroutine[Any, Any, None]]):
 		frames = []
 		try:
-			voskcon: ClientConnection = await connect(self.__server_url)
+			ssl_ctx = get_ssl_context(self.__server_url)
+			voskcon: ClientConnection = await connect(
+				self.__server_url,
+				*({
+					"server_hostname": urlparse(self.__server_url).hostname,
+					"ssl": ssl_ctx,
+				} if ssl_ctx else {})
+			)
 			await voskcon.send(
 				json.dumps({
 					"config": {
