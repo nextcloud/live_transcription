@@ -3,6 +3,7 @@
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from threading import Event
 
 # isort: off
 from livetypes import TranscribeRequest
@@ -15,24 +16,33 @@ from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, run_app, set_handlers
 from service import Application
 
 load_dotenv()
-application: Application
+SERVICE: Application
+ENABLED = Event()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global application
+    global SERVICE
     set_handlers(app, enabled_handler, default_init=False)
-    application = Application()
+    SERVICE = Application()
+    nc = NextcloudApp()
+    if nc.enabled_state:
+        ENABLED.set()
     yield
 
 
 APP = FastAPI(lifespan=lifespan)
 # APP.add_middleware(AppAPIAuthMiddleware)  # set global AppAPI authentication middleware
 
-# todo: add control of supervisord processes and also expose them via API
+
+@APP.get("/enabled")
+async def get_enabled():
+    return {"enabled": ENABLED.is_set()}
+
 
 @APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest, bg: BackgroundTasks):
-    bg.add_task(application.transcript_req, req)
+    bg.add_task(SERVICE.transcript_req, req)
 
 
 def report_100():
@@ -52,8 +62,10 @@ def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
     # NOTE: `user` is unavailable on this step, so all NC API calls that require it will fail as unauthorized.
     print(f"enabled={enabled}", flush=True)
     if enabled:
+        ENABLED.set()
         nc.log(LogLvl.WARNING, f"Hello from {nc.app_cfg.app_name} :)")
     else:
+        ENABLED.clear()
         nc.log(LogLvl.WARNING, f"Bye bye from {nc.app_cfg.app_name} :(")
     # In case of an error, a non-empty short string should be returned, which will be shown to the NC administrator.
     return ""
