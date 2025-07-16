@@ -23,6 +23,8 @@ import websockets as ws
 from vosk import GpuInit, GpuThreadInit, KaldiRecognizer, Model
 
 THREAD_POOL_WORKERS = min(32, (os.cpu_count() or 1) + 4)
+if os.getenv("LT_MAX_WORKERS", "invalid").isnumeric():
+	THREAD_POOL_WORKERS = max(5, int(os.environ["LT_MAX_WORKERS"]))
 SAMPLE_RATE = 48000.0
 
 model: Model
