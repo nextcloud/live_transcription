@@ -48,6 +48,11 @@
 				<display-name>Skip SSL certificate verification</display-name>
 				<description>When set to "true", certificate verifications will ke skipped for the websocket connections to the HPB.</description>
 			</variable>
+			<variable>
+				<name>LT_MAX_WORKERS</name>
+				<display-name>Max concurrent transcription workers</display-name>
+				<description>This limits concurrency of the transcription and by extension the max GPU/system memory usage. One worker processes one stream at a time.</description>
+			</variable>
 		</environment-variables>
 		<routes>
 		</routes>
