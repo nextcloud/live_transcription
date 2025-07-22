@@ -1,19 +1,19 @@
 """Service module."""
 
 import asyncio
+import dataclasses
 import hashlib
 import hmac
 import json
 import os
 import pprint
 import ssl
-from collections.abc import Callable, Coroutine
+import threading
+from contextlib import suppress
 from enum import IntEnum
 from functools import partial
 from secrets import token_urlsafe
-from threading import RLock
 from traceback import print_exc
-from typing import Any
 from urllib.parse import urlparse
 
 from aiortc import AudioStreamTrack, RTCPeerConnection, RTCSessionDescription
@@ -27,7 +27,7 @@ from livetypes import HPBSettings, LanguageSetRequest, StreamEndedException, Tar
 from nc_py_api import NextcloudApp
 from print_color import print
 from websockets import ClientConnection, connect
-from websockets.exceptions import ConnectionClosedOK
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 load_dotenv()
 
@@ -82,21 +82,55 @@ def get_ssl_context(server_addr: str) -> ssl.SSLContext | None:
 	return None
 
 
+class PeerConnection:
+	def __init__(self, session_id: str, pc: RTCPeerConnection):
+		self.session_id = session_id
+		self.pc = pc
+
+
+class AudioStream:
+	def __init__(self, track: AudioStreamTrack):
+		self.track = track
+		self._ended = False
+
+		@track.on("ended")
+		async def on_ended():
+			print("Track ended", tag="track", color="blue")
+			self._ended = True
+
+	async def receive(self) -> AudioFrame:
+		"""Receive the next audio frame."""
+		if self._ended:
+			raise StreamEndedException("Track has ended")
+		return await self.track.recv()  # type: ignore[return-value]
+
+	def stop(self):
+		"""Stop the audio stream."""
+		self.track.stop()
+
+
+# data carrier in the transcript_queue
+@dataclasses.dataclass
+class Transcript:
+	message: str
+	speaker_session_id: str
+
+
 class SpreedClient:
 	def __init__(
 		self,
 		room_token: str,
-		# transcript_queue: asyncio.Queue,
 		hpb_settings: HPBSettings,
-		stream_listener: Callable[[str, Any, str], None], # session_id, stream, room_token
+		lang_id: str,
 	) -> None:
 		self.id = 0
 		self._server: ClientConnection | None = None
 		self._monitor: asyncio.Task | None = None
 		self.peer_connections: dict[str, PeerConnection] = {}
 		self.targets: dict[str, Target] = {}
-		self.target_lock = RLock()
-		# self.transcript_queue = transcript_queue
+		self.target_lock = threading.RLock()
+		self.transcript_queue = asyncio.Queue()
+		self.transcriber = VoskTranscriber(lang_id, self.transcript_queue)
 
 		self.resumeid = None
 		self.sessionid = None
@@ -108,7 +142,7 @@ class SpreedClient:
 
 		self.room_token = room_token
 		self.hpb_settings = hpb_settings
-		self.stream_listener = stream_listener
+		self.lang_id = lang_id
 
 
 	async def connect(self) -> ConnectResult:
@@ -157,7 +191,8 @@ class SpreedClient:
 				return ConnectResult.RETRY
 
 		self._monitor = asyncio.create_task(self.signalling_monitor())
-		# self._transcript_sender = asyncio.create_task(self.transcript_sender())
+		self._transcript_sender = asyncio.create_task(self.transcipt_queue_consumer())
+
 		await self.send_incall()
 		await self.send_join()
 		print("Connected to signaling server")
@@ -170,9 +205,9 @@ class SpreedClient:
 
 		self.id += 1
 		message["id"] = str(self.id)
-		# print('Message sent:', tag='sent_message', color='green', flush=True)
-		# pprint.pprint(message)
 		await self._server.send(json.dumps(message))
+		# print("Message sent:", tag="sent_message", color="green", flush=True)
+		# pprint.pprint(message)
 
 	async def send_hello(self):
 		nonce = token_urlsafe(64)
@@ -299,29 +334,38 @@ class SpreedClient:
 				}
 			})
 
+	# todo: add function to reconnect to hpb, full SpreedClient lifecycle
 	async def close(self, using_resume: bool = False):
-		await self.send_bye()
+		with suppress(Exception):
+			await self.send_bye()
 
 		if not using_resume:
 			for pc in self.peer_connections.values():
 				if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
 					print(f"Closing peer connection for session {pc.session_id}", tag="connection", color="blue")
-					await pc.pc.close()
+					with suppress(Exception):
+						await pc.pc.close()
 			self.peer_connections.clear()
 			self.resumeid = None
 			self.sessionid = None
 
-		if self._monitor and not self._monitor.done():
-			print("Cancelling monitor task", tag="monitor", color="red")
-			# Cancel the monitor task if it's still running
-			self._monitor.cancel()
-			self._monitor = None
+		with suppress(Exception):
+			if self._monitor and not self._monitor.done():
+				print("Cancelling monitor task", tag="monitor", color="blue")
+				# Cancel the monitor task if it's still running
+				self._monitor.cancel()
+				self._monitor = None
 
-		if self._server:
-			print("Closing server connection", tag="connection", color="red")
-			# Close the WebSocket connection if it's still open
-			await self._server.close()
-			self._server = None
+			if self._transcript_sender and not self._transcript_sender.done():
+				print("Cancelling transcript consumer task", tag="consumer", color="blue")
+				self._transcript_sender.cancel()
+				self._transcript_sender = None
+
+			if self._server:
+				print("Closing server connection", tag="connection", color="red")
+				# Close the WebSocket connection if it's still open
+				await self._server.close()
+				self._server = None
 
 	async def receive(self, timeout: int = 0) -> dict | None:
 		if not self._server:
@@ -340,8 +384,8 @@ class SpreedClient:
 		message = json.loads(received_msg)
 		# todo: debug message
 		# todo: add logger_config.yaml
-		print("Message received:", tag="received_message", color="purple")
-		pprint.pprint(message)
+		# print("Message received:", tag="received_message", color="purple")
+		# pprint.pprint(message)
 		return message
 
 	def add_target(self, session_id: str):
@@ -371,9 +415,14 @@ class SpreedClient:
 
 			try:
 				message = await self.receive()
-			except ConnectionClosedOK:
-				print("Connection closed", tag="connection", color="blue", flush=True)
+			except ConnectionClosed as e:
+				print("HPB websocket connection closed:", e, tag="connection", color="blue", flush=True)
+				# todo: retry connection?
 				# break
+			except WebSocketException as e:
+				print("HPB websocket error:", e, tag="connection", color="red", flush=True)
+				await self.close(using_resume=True)
+				break
 
 			if message.get("type") == "error":
 				print(
@@ -444,8 +493,8 @@ class SpreedClient:
 	async def handle_offer(self, message):
 		"""Handle incoming offer messages."""
 		print("Got offer from", message["message"]["sender"]["sessionid"], tag="offer", color="blue")
-		# targets[message['message']['sender']['sessionid']].in_call = True
 
+		# todo: optional ice servers
 		ice_servers = RTCConfiguration(
 			iceServers=[
 				RTCIceServer(urls=self.hpb_settings.stunservers[0].urls),
@@ -461,9 +510,14 @@ class SpreedClient:
 		@pc.on("track")
 		async def on_track(track):
 			if track.kind == "audio":
-				print(f"Receiving {track.kind}", tag="track", color="magenta")
+				print(
+					f"Receiving {track.kind} from {message["message"]["sender"]["sessionid"]}",
+					tag="track",
+					color="blue",
+				)
 				stream = AudioStream(track)
-				self.stream_listener(message["message"]["sender"]["sessionid"], stream, self.room_token)
+				await self.transcriber.start(self.sessionid, stream)
+				print(f'Started transcriber for "{self.sessionid}" in "{self.lang_id}"', tag="offer", color="blue")
 		self.peer_connections[message["message"]["sender"]["sessionid"]] = PeerConnection(
 			session_id=message["message"]["sender"]["sessionid"],
 			pc=pc,
@@ -489,50 +543,55 @@ class SpreedClient:
 					line[2:],
 				)
 
+	def set_language(self, lang_id: str):
+		self.lang_id = lang_id
 
-class PeerConnection:
-	def __init__(self, session_id: str, pc: RTCPeerConnection):
-		self.session_id = session_id
-		self.pc = pc
+	async def transcipt_queue_consumer(self):
+		"""Consume transcripts from the queue and send them to the server."""
+		print("Starting the transcript queue consumer", tag="transcript", color="blue")
+		while True:
+			transcript: Transcript = await self.transcript_queue.get()
+			if transcript is None:
+				print("Received None in transcript queue, stopping consumer", tag="transcript", color="blue")
+				break
 
-
-class AudioStream:
-	def __init__(self, track: AudioStreamTrack):
-		self.track = track
-		self._ended = False
-
-		@track.on("ended")
-		async def on_ended():
-			print("Track ended", tag="track", color="blue")
-			self._ended = True
-
-	async def receive(self) -> AudioFrame:
-		"""Receive the next audio frame."""
-		if self._ended:
-			raise StreamEndedException("Track has ended")
-		return await self.track.recv()  # type: ignore[return-value]
-
-	def stop(self):
-		"""Stop the audio stream."""
-		self.track.stop()
+			# todo
+			print(
+				"Speaker session id:", transcript.speaker_session_id,
+				tag="speaker_session_id",
+				color="green",
+			)
+			try:
+				await asyncio.wait_for(
+					self.send_transcript(
+						message=transcript.message,
+						spk_session_id=transcript.speaker_session_id,
+					),
+					timeout=10,
+				)
+			except TimeoutError:
+				print("Timeout while sending transcript", tag="transcript", color="red")
+				continue
+			except Exception as e:
+				print(f"Error while sending transcript in room {self.room_token}: {e}", tag="transcript", color="red")
+				continue
 
 
 class VoskTranscriber:
-	def __init__(self, language: str):
-		self.__text_listener_tasks: set[asyncio.Task] = set()
+	def __init__(self, language: str, transcript_queue: asyncio.Queue):
 		self.__resampler = AudioResampler(format="s16", layout="mono", rate=48000)
 		self.__audio_task: dict[str, asyncio.Task] = {}
 		self.__language = language
 		self.__server_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
 		self.__voskcon: ClientConnection | None = None
+		self.__transcript_queue = transcript_queue
 
 	async def start(
 		self,
 		session_id: str,
 		stream: AudioStream,
-		text_listener: Callable[[str], Coroutine[Any, Any, None]]
 	):
-		self.__audio_task[session_id] = asyncio.create_task(self.__run_audio_xfer(stream, text_listener))
+		self.__audio_task[session_id] = asyncio.create_task(self.__run_audio_xfer(stream, session_id))
 		self.__audio_task[session_id].add_done_callback(partial(self.stop, stream, session_id))
 
 	def stop(self, stream: AudioStream, session_id: str, future: asyncio.Future):
@@ -543,7 +602,7 @@ class VoskTranscriber:
 			self.__audio_task[session_id].cancel()
 			del self.__audio_task[session_id]
 
-	async def switch_language(self, language: str) -> bool:
+	async def set_language(self, language: str) -> bool:
 		if not self.__voskcon:
 			print("Vosk connection is not established, cannot switch language", tag="vosk", color="red")
 			return False
@@ -573,7 +632,7 @@ class VoskTranscriber:
 		print("Language switched successfully", tag="vosk", color="green")
 		return json_res.get("success", False)
 
-	async def __run_audio_xfer(self, stream: AudioStream, text_listener: Callable[[str], Coroutine[Any, Any, None]]):
+	async def __run_audio_xfer(self, stream: AudioStream, speaker_session_id: str):
 		frames = []
 		try:
 			ssl_ctx = get_ssl_context(self.__server_url)
@@ -637,9 +696,10 @@ class VoskTranscriber:
 				if message == "":
 					continue
 
-				task: asyncio.Task = asyncio.create_task(text_listener(message))
-				self.__text_listener_tasks.add(task)
-				task.add_done_callback(self.__text_listener_tasks.discard)
+				self.__transcript_queue.put_nowait(Transcript(
+					message=message,
+					speaker_session_id=speaker_session_id,
+				))
 		except StreamEndedException:
 			print("Stream ended", tag="stream", color="red")
 		except MediaStreamError:
@@ -652,9 +712,6 @@ class VoskTranscriber:
 			await self.__voskcon.send('{"eof" : 1}')
 			await self.__voskcon.close()
 			self.__voskcon = None
-			for task in self.__text_listener_tasks:
-				task.cancel("Cancelling text listener task in VoskTranscriber")
-			self.__text_listener_tasks.clear()
 			print("VoskTranscriber stopped", tag="vosk", color="green")
 
 
@@ -662,18 +719,17 @@ class Application:
 	def __init__(self) -> None:
 		self.hpb_settings = get_hpb_settings()
 		self.spreed_clients: dict[str, SpreedClient] = {}
-		self.transcribers: dict[str, VoskTranscriber] = {}
-		self.transcript_queue: asyncio.Queue = asyncio.Queue()
-		self.queue_consumers: set[asyncio.Task] = set()
+		self.spreed_clients_lock = threading.Lock()
 
 	async def transcript_req(self, req: TranscribeRequest) -> None:
-		if req.roomToken in self.spreed_clients:
-			print(f"Already in call with room token: {req.roomToken}, adding target {req.sessionId}")
-			if req.enable:
-				self.spreed_clients[req.roomToken].add_target(req.sessionId)
-			else:
-				self.spreed_clients[req.roomToken].remove_target(req.sessionId)
-			return
+		with self.spreed_clients_lock:
+			if req.roomToken in self.spreed_clients:
+				print(f"Already in call with room token: {req.roomToken}, adding target {req.sessionId}")
+				if req.enable:
+					self.spreed_clients[req.roomToken].add_target(req.sessionId)
+				else:
+					self.spreed_clients[req.roomToken].remove_target(req.sessionId)
+				return
 
 		if not req.enable:
 			print(
@@ -682,21 +738,14 @@ class Application:
 			)
 			return
 
-		# todo: join if not already in call
 		print(f"Joining call with room token: {req.roomToken}, req.sessionId: {req.sessionId}")
-		# todo
-		# self.transcript_queues[req.roomToken] = asyncio.Queue()
-		self.spreed_clients[req.roomToken] = SpreedClient(
-			req.roomToken,
-			# self.transcript_queues[req.roomToken],
-			self.hpb_settings,
-			self.stream_listener,
-		)
+		with self.spreed_clients_lock:
+			self.spreed_clients[req.roomToken] = SpreedClient(
+				req.roomToken,
+				self.hpb_settings,
+				req.langId,
+			)
 		self.spreed_clients[req.roomToken].add_target(req.sessionId)
-
-		task: asyncio.Task = asyncio.create_task(self.queue_consumer())
-		self.queue_consumers.add(task)
-		task.add_done_callback(self.queue_consumers.discard)
 
 		tries = MAX_CONNECT_TRIES
 		while tries > 0:
@@ -743,47 +792,25 @@ class Application:
 
 		print(f"Failed to connect after {MAX_CONNECT_TRIES} attempts, giving up", tag="connection", color="red")
 
-	async def set_call_language(self, req: LanguageSetRequest):
+	async def set_call_language(self, req: LanguageSetRequest) -> bool:
 		if req.roomToken not in self.spreed_clients:
 			print(f"No SpreedClient for room token {req.roomToken}, cannot set language", tag="vosk", color="red")
-			return
+			return False
 
+		self.spreed_clients_lock.acquire()
+		try:
+			spreed_client = self.spreed_clients[req.roomToken]
+			spreed_client.set_language(req.langId)
+			return await spreed_client.transcriber.set_language(req.langId)
+		except Exception as e:
+			print(f"Error setting language for room token {req.roomToken}: {e}", tag="vosk", color="red")
+			return False
+		finally:
+			self.spreed_clients_lock.release()
+
+	async def leave_room(self, room_token: str):
 		# todo
-
-	async def on_transcript(self, room_token: str, spk_session_id: str, message: str):
-		sclient = self.spreed_clients.get(room_token)
-		if sclient is None:
-			print(f"Error: no SpreedClient for room token {room_token}", tag="vosk", color="red")
-			return
-		await self.transcript_queue.put(sclient.send_transcript(message, spk_session_id))
-
-	async def queue_consumer(self):
-		while True:
-			coroutine = await self.transcript_queue.get()
-			if coroutine is None:
-				# our task is done
-				break
-
-			try:
-				await asyncio.wait_for(coroutine, timeout=10)
-			except TimeoutError:
-				print("Timeout waiting for transcript sender", tag="vosk", color="red")
-				continue
-			except Exception as e:
-				print("Error sending transcript in room ", self.room_token, e, tag="vosk", color="red")
-				continue
-
-	def stream_listener(self, session_id: str, stream: AudioStream, room_token: str) -> None:
-		"""Handle incoming audio stream."""
-		print(f"Received audio stream from {session_id}")
-		language = "en"  # TODO: get language from the transcription request
-		if language not in self.transcribers:
-			self.transcribers[language] = VoskTranscriber(language)
-		asyncio.run_coroutine_threadsafe(
-			self.transcribers[language].start(session_id, stream, partial(self.on_transcript, room_token, session_id)),
-			asyncio.get_event_loop(),
-		)
-		print(f"Started transcriber for {session_id} in {language}")
+		...
 
 
 def check_hpb_env_vars():
