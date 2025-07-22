@@ -24,7 +24,14 @@ class StreamEndedException(Exception):
 class TranscribeRequest(BaseModel):
 	roomToken: str
 	sessionId: str
+	langId: str
 	enable: bool
+
+
+class LanguageSetRequest(BaseModel):
+	roomToken: str
+	langId: str
+
 
 class Target(BaseModel):
 	# todo: any metadata or can be reduced to just a list of session ids?
