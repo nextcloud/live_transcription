@@ -11,6 +11,7 @@ from livetypes import LanguageSetRequest, TranscribeRequest
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
+from fastapi.responses import JSONResponse
 from nc_py_api import NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, persistent_storage, run_app, set_handlers
 from service import Application
@@ -47,10 +48,13 @@ async def get_enabled():
     return {"enabled": ENABLED.is_set()}
 
 
+# todo
 @APP.post("/setCallLanguage")
 async def set_call_language(req: LanguageSetRequest):
-    if SERVICE.set_call_language(req):
-        return {"status": "success"}
+    ret = await SERVICE.set_call_language(req)
+    if ret:
+        return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
+    return JSONResponse(status_code=400, content={"error": "Failed to set language for the call"})
 
 
 @APP.post("/transcribeCall")
