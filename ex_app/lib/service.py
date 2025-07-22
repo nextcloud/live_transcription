@@ -23,7 +23,7 @@ from aiortc.sdp import candidate_from_sdp
 from av.audio.frame import AudioFrame
 from av.audio.resampler import AudioResampler
 from dotenv import load_dotenv
-from livetypes import HPBSettings, StreamEndedException, Target, TranscribeRequest
+from livetypes import HPBSettings, LanguageSetRequest, StreamEndedException, Target, TranscribeRequest
 from nc_py_api import NextcloudApp
 from print_color import print
 from websockets import ClientConnection, connect
@@ -116,9 +116,9 @@ class SpreedClient:
 		ssl_ctx = get_ssl_context(self._websopcket_url)
 		self._server = await connect(
 			self._websopcket_url,
-			*({
+			**({
 				"server_hostname": websopcket_host,
-				"ssl": ssl_ctx,
+				"ssl": ssl_ctx,  # type: ignore[arg-type]
 			} if ssl_ctx else {}),
 		)
 
@@ -503,7 +503,7 @@ class AudioStream:
 
 		@track.on("ended")
 		async def on_ended():
-			print("Track ended", tag="track", color="magenta")
+			print("Track ended", tag="track", color="blue")
 			self._ended = True
 
 	async def receive(self) -> AudioFrame:
@@ -524,6 +524,7 @@ class VoskTranscriber:
 		self.__audio_task: dict[str, asyncio.Task] = {}
 		self.__language = language
 		self.__server_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
+		self.__voskcon: ClientConnection | None = None
 
 	async def start(
 		self,
@@ -536,35 +537,65 @@ class VoskTranscriber:
 
 	def stop(self, stream: AudioStream, session_id: str, future: asyncio.Future):
 		if session_id in self.__audio_task:
-			print("Stopping audio task for session_id: " + session_id, tag="vosk", color="red", flush=True)
+			print("Stopping audio task for session_id: " + session_id, tag="vosk", color="blue", flush=True)
 			stream.stop()
 			future.cancel("Cancelling audio task in VoskTranscriber for session_id: " + session_id)
 			self.__audio_task[session_id].cancel()
 			del self.__audio_task[session_id]
 
+	async def switch_language(self, language: str) -> bool:
+		if not self.__voskcon:
+			print("Vosk connection is not established, cannot switch language", tag="vosk", color="red")
+			return False
+		if self.__language == language:
+			print(f"Language is already set to {language}, no need to switch", tag="vosk", color="blue")
+			return True
+
+		print(f"Switching Vosk language from {self.__language} to {language}", tag="vosk", color="blue")
+		self.__language = language
+		await self.__voskcon.send(
+			json.dumps({
+				"config": {
+					"language": self.__language,
+				}
+			})
+		)
+		response = await self.__voskcon.recv()
+		if not response:
+			print("No response from Vosk server after switching language", tag="vosk", color="red")
+			return False
+		print("Response from Vosk server after switching language:", response, tag="vosk", color="blue")
+		try:
+			json_res = json.loads(response)
+		except json.JSONDecodeError:
+			print("Error decoding JSON response from Vosk server after switching language", tag="vosk", color="red")
+			return False
+		print("Language switched successfully", tag="vosk", color="green")
+		return json_res.get("success", False)
+
 	async def __run_audio_xfer(self, stream: AudioStream, text_listener: Callable[[str], Coroutine[Any, Any, None]]):
 		frames = []
 		try:
 			ssl_ctx = get_ssl_context(self.__server_url)
-			voskcon: ClientConnection = await connect(
+			self.__voskcon = await connect(
 				self.__server_url,
 				*({
 					"server_hostname": urlparse(self.__server_url).hostname,
 					"ssl": ssl_ctx,
 				} if ssl_ctx else {})
 			)
-			await voskcon.send(
+			await self.__voskcon.send(
 				json.dumps({
 					"config": {
 						"sample_rate": 48000,
-						"language": self.__language,  # todo: get language from stream/ocs
+						"language": self.__language,
 						# "show_words": True,
 					}
 				})
 			)
 		except Exception as e:
 			print("Error connecting to Vosk server. Cannot continue further.", e, tag="vosk", color="red")
-			# todo: close the stream and cancel the task, close the HPB connection too
+			self.__voskcon = None
 			return
 
 		try:
@@ -586,8 +617,8 @@ class VoskTranscriber:
 						dataframes += bytes(rfr.planes[0])[:rfr.samples * 2]
 				frames.clear()
 
-				await voskcon.send(bytes(dataframes))
-				result = await voskcon.recv()
+				await self.__voskcon.send(bytes(dataframes))
+				result = await self.__voskcon.recv()
 				end = perf_counter()
 
 				if not result:
@@ -617,9 +648,10 @@ class VoskTranscriber:
 			print("Error in transcriber", e, tag="transcriber", color="red")
 			print_exc()
 		finally:
-			print("Closing Vosk connection", tag="vosk", color="red")
-			await voskcon.send('{"eof" : 1}')
-			await voskcon.close()
+			print("Closing Vosk connection", tag="vosk", color="blue")
+			await self.__voskcon.send('{"eof" : 1}')
+			await self.__voskcon.close()
+			self.__voskcon = None
 			for task in self.__text_listener_tasks:
 				task.cancel("Cancelling text listener task in VoskTranscriber")
 			self.__text_listener_tasks.clear()
@@ -711,6 +743,13 @@ class Application:
 
 		print(f"Failed to connect after {MAX_CONNECT_TRIES} attempts, giving up", tag="connection", color="red")
 
+	async def set_call_language(self, req: LanguageSetRequest):
+		if req.roomToken not in self.spreed_clients:
+			print(f"No SpreedClient for room token {req.roomToken}, cannot set language", tag="vosk", color="red")
+			return
+
+		# todo
+
 	async def on_transcript(self, room_token: str, spk_session_id: str, message: str):
 		sclient = self.spreed_clients.get(room_token)
 		if sclient is None:
@@ -720,7 +759,6 @@ class Application:
 
 	async def queue_consumer(self):
 		while True:
-			# todo: make this scale
 			coroutine = await self.transcript_queue.get()
 			if coroutine is None:
 				# our task is done
@@ -738,7 +776,7 @@ class Application:
 	def stream_listener(self, session_id: str, stream: AudioStream, room_token: str) -> None:
 		"""Handle incoming audio stream."""
 		print(f"Received audio stream from {session_id}")
-		language = "en"  # TODO: Get language from stream/ocs
+		language = "en"  # TODO: get language from the transcription request
 		if language not in self.transcribers:
 			self.transcribers[language] = VoskTranscriber(language)
 		asyncio.run_coroutine_threadsafe(

@@ -6,24 +6,31 @@ from pathlib import Path
 from threading import Event
 
 # isort: off
-from livetypes import TranscribeRequest
+from livetypes import LanguageSetRequest, TranscribeRequest
 # isort: on
 
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI
 from nc_py_api import NextcloudApp
-from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, run_app, set_handlers
+from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, persistent_storage, run_app, set_handlers
 from service import Application
 
 load_dotenv()
 SERVICE: Application
 ENABLED = Event()
+MODELS_TO_FETCH = {
+    "Nextcloud-AI/vosk-models": {
+		"local_dir": persistent_storage(),
+		"revision": "22028d0a4474d7fc210cf7867da9eac6e3eb22e0",
+	}
+}
+# todo: declarative settings for language override and model download
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global SERVICE
-    set_handlers(app, enabled_handler, default_init=False)
+    set_handlers(app, enabled_handler, models_to_fetch=MODELS_TO_FETCH)
     SERVICE = Application()
     nc = NextcloudApp()
     if nc.enabled_state:
@@ -40,21 +47,15 @@ async def get_enabled():
     return {"enabled": ENABLED.is_set()}
 
 
+@APP.post("/setCallLanguage")
+async def set_call_language(req: LanguageSetRequest):
+    if SERVICE.set_call_language(req):
+        return {"status": "success"}
+
+
 @APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest, bg: BackgroundTasks):
     bg.add_task(SERVICE.transcript_req, req)
-
-
-def report_100():
-    nc = NextcloudApp()
-    nc.set_init_status(100)
-
-@APP.post("/init")
-async def init_fn(bg: BackgroundTasks):
-    # todo: download vosk en model and restart the vosk server
-    print("init_fn called", flush=True)
-    bg.add_task(report_100)
-    ...
 
 
 def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
