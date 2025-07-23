@@ -113,6 +113,7 @@ async def recognize(websocket: ws.ServerConnection):
 				if "sample_rate" in config:
 					sample_rate = float(config["sample_rate"])
 				if "language" in config:
+					await maybe_release_model(lang)
 					lang = config["language"]
 					logging.info("Language set to %s", lang)
 					model = await get_model(lang)
