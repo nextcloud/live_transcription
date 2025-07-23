@@ -584,6 +584,7 @@ class VoskTranscriber:
 		self.__language = language
 		self.__server_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
 		self.__voskcon: ClientConnection | None = None
+		self.__voskcon_lock = asyncio.Lock()
 		self.__transcript_queue = transcript_queue
 
 	async def start(
@@ -591,6 +592,8 @@ class VoskTranscriber:
 		session_id: str,
 		stream: AudioStream,
 	):
+		if session_id in self.__audio_task:
+			self.stop(stream, session_id, self.__audio_task[session_id])
 		self.__audio_task[session_id] = asyncio.create_task(self.__run_audio_xfer(stream, session_id))
 		self.__audio_task[session_id].add_done_callback(partial(self.stop, stream, session_id))
 
@@ -612,14 +615,19 @@ class VoskTranscriber:
 
 		print(f"Switching Vosk language from {self.__language} to {language}", tag="vosk", color="blue")
 		self.__language = language
-		await self.__voskcon.send(
-			json.dumps({
-				"config": {
-					"language": self.__language,
-				}
-			})
-		)
-		response = await self.__voskcon.recv()
+		async with self.__voskcon_lock:
+			await self.__voskcon.send(
+				json.dumps({
+					"config": {
+						"language": self.__language,
+					}
+				})
+			)
+			response = None
+			max_received_msgs = 5
+			while (not response or "success" not in response) and max_received_msgs > 0:
+				response = await self.__voskcon.recv()
+				max_received_msgs -= 1
 		if not response:
 			print("No response from Vosk server after switching language", tag="vosk", color="red")
 			return False
@@ -635,23 +643,24 @@ class VoskTranscriber:
 	async def __run_audio_xfer(self, stream: AudioStream, speaker_session_id: str):
 		frames = []
 		try:
-			ssl_ctx = get_ssl_context(self.__server_url)
-			self.__voskcon = await connect(
-				self.__server_url,
-				*({
-					"server_hostname": urlparse(self.__server_url).hostname,
-					"ssl": ssl_ctx,
-				} if ssl_ctx else {})
-			)
-			await self.__voskcon.send(
-				json.dumps({
-					"config": {
-						"sample_rate": 48000,
-						"language": self.__language,
-						# "show_words": True,
-					}
-				})
-			)
+			async with self.__voskcon_lock:
+				ssl_ctx = get_ssl_context(self.__server_url)
+				self.__voskcon = await connect(
+					self.__server_url,
+					*({
+						"server_hostname": urlparse(self.__server_url).hostname,
+						"ssl": ssl_ctx,
+					} if ssl_ctx else {})
+				)
+				await self.__voskcon.send(
+					json.dumps({
+						"config": {
+							"sample_rate": 48000,
+							"language": self.__language,
+							# "show_words": True,
+						}
+					})
+				)
 		except Exception as e:
 			print("Error connecting to Vosk server. Cannot continue further.", e, tag="vosk", color="red")
 			self.__voskcon = None
@@ -676,8 +685,9 @@ class VoskTranscriber:
 						dataframes += bytes(rfr.planes[0])[:rfr.samples * 2]
 				frames.clear()
 
-				await self.__voskcon.send(bytes(dataframes))
-				result = await self.__voskcon.recv()
+				async with self.__voskcon_lock:
+					await self.__voskcon.send(bytes(dataframes))
+					result = await self.__voskcon.recv()
 				end = perf_counter()
 
 				if not result:
