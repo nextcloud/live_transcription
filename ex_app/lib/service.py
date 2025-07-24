@@ -23,7 +23,14 @@ from aiortc.sdp import candidate_from_sdp
 from av.audio.frame import AudioFrame
 from av.audio.resampler import AudioResampler
 from dotenv import load_dotenv
-from livetypes import HPBSettings, LanguageSetRequest, StreamEndedException, Target, TranscribeRequest
+from livetypes import (
+	HPBSettings,
+	LanguageSetRequest,
+	SpreedClientException,
+	StreamEndedException,
+	Target,
+	TranscribeRequest,
+)
 from nc_py_api import NextcloudApp
 from print_color import print
 from websockets import ClientConnection, connect
@@ -130,7 +137,7 @@ class SpreedClient:
 		self.targets: dict[str, Target] = {}
 		self.target_lock = threading.RLock()
 		self.transcript_queue = asyncio.Queue()
-		self.transcriber = VoskTranscriber(lang_id, self.transcript_queue)
+		self.transcriber: VoskTranscriber | None = None
 
 		self.resumeid = None
 		self.sessionid = None
@@ -189,6 +196,21 @@ class SpreedClient:
 			if msg_counter > 10:
 				print("Too many messages received without 'welcome', reconnecting...", tag="connection", color="red")
 				return ConnectResult.RETRY
+
+		# connect to the Vosk server
+		try:
+			self.transcriber = VoskTranscriber(self.lang_id, self.transcript_queue)
+			await self.transcriber.connect()
+		except Exception as e:
+			print(
+				f'Error connecting to the Vosk server at "{os.getenv("LT_VOSK_SERVER_URL", "ws://localhost:2702")}". '
+				'Cannot continue further.', e, tag="vosk", color="red"
+			)
+			raise SpreedClientException(
+				'Error connecting to the Vosk transcription server. '
+				'Please check for the logs of that service. '
+				f'It was expected to be available at "{os.getenv("LT_VOSK_SERVER_URL", "ws://localhost:2702")}"'
+			) from e
 
 		self._monitor = asyncio.create_task(self.signalling_monitor())
 		self._transcript_sender = asyncio.create_task(self.transcipt_queue_consumer())
@@ -522,8 +544,11 @@ class SpreedClient:
 					color="blue",
 				)
 				stream = AudioStream(track)
-				await self.transcriber.start(self.sessionid, stream)
-				print(f'Started transcriber for "{self.sessionid}" in "{self.lang_id}"', tag="offer", color="blue")
+				if self.transcriber:
+					await self.transcriber.start(self.sessionid, stream)
+					print(f'Started transcriber for "{self.sessionid}" in "{self.lang_id}"', tag="offer", color="blue")
+				else:
+					print("Transcriber is not initialized, cannot start transcribing", tag="offer", color="red")
 		self.peer_connections[message["message"]["sender"]["sessionid"]] = PeerConnection(
 			session_id=message["message"]["sender"]["sessionid"],
 			pc=pc,
@@ -593,6 +618,26 @@ class VoskTranscriber:
 		self.__voskcon_lock = asyncio.Lock()
 		self.__transcript_queue = transcript_queue
 
+	async def connect(self):
+		ssl_ctx = get_ssl_context(self.__server_url)
+		async with self.__voskcon_lock:
+			self.__voskcon: ClientConnection | None = await connect(
+				self.__server_url,
+				*({
+					"server_hostname": urlparse(self.__server_url).hostname,
+					"ssl": ssl_ctx,
+				} if ssl_ctx else {})
+			)
+			await self.__voskcon.send(
+				json.dumps({
+					"config": {
+						"sample_rate": 48000,
+						"language": self.__language,
+						# "show_words": True,
+					}
+				})
+			)
+
 	async def start(
 		self,
 		session_id: str,
@@ -630,12 +675,21 @@ class VoskTranscriber:
 				})
 			)
 			response = None
-			max_received_msgs = 5
+			max_received_msgs = MAX_CONNECT_TRIES
 			while (not response or "success" not in response) and max_received_msgs > 0:
 				response = await self.__voskcon.recv()
 				max_received_msgs -= 1
-		if not response:
-			print("No response from Vosk server after switching language", tag="vosk", color="red")
+		if not response or "success" not in response:
+			print(
+				"Expected 'success' in response from Vosk server after switching language, but got:",
+				response, tag="vosk", color="red",
+			)
+			if max_received_msgs <= 0:
+				print(
+					"Max received messages limit reached while waiting for Vosk server response",
+					tag="vosk",
+					color="red",
+				)
 			return False
 		print("Response from Vosk server after switching language:", response, tag="vosk", color="blue")
 		try:
@@ -648,30 +702,6 @@ class VoskTranscriber:
 
 	async def __run_audio_xfer(self, stream: AudioStream, speaker_session_id: str):
 		frames = []
-		try:
-			async with self.__voskcon_lock:
-				ssl_ctx = get_ssl_context(self.__server_url)
-				self.__voskcon = await connect(
-					self.__server_url,
-					*({
-						"server_hostname": urlparse(self.__server_url).hostname,
-						"ssl": ssl_ctx,
-					} if ssl_ctx else {})
-				)
-				await self.__voskcon.send(
-					json.dumps({
-						"config": {
-							"sample_rate": 48000,
-							"language": self.__language,
-							# "show_words": True,
-						}
-					})
-				)
-		except Exception as e:
-			print("Error connecting to Vosk server. Cannot continue further.", e, tag="vosk", color="red")
-			self.__voskcon = None
-			return
-
 		try:
 			# todo
 			from time import perf_counter
@@ -764,6 +794,7 @@ class Application:
 		self.spreed_clients[req.roomToken].add_target(req.sessionId)
 
 		tries = MAX_CONNECT_TRIES
+		last_exc = None
 		while tries > 0:
 			try:
 				conn_result = await self.spreed_clients[req.roomToken].connect()
@@ -804,9 +835,13 @@ class Application:
 					color="red",
 				)
 				tries -= 1
+				last_exc = e
 				await asyncio.sleep(2)
 
 		print(f"Failed to connect after {MAX_CONNECT_TRIES} attempts, giving up", tag="connection", color="red")
+		raise SpreedClientException(
+			f"Failed to connect to signaling server for room token {req.roomToken} after {MAX_CONNECT_TRIES} attempts"
+		) from last_exc
 
 	async def set_call_language(self, req: LanguageSetRequest) -> bool:
 		if req.roomToken not in self.spreed_clients:
@@ -866,5 +901,4 @@ def get_hpb_settings() -> HPBSettings:
 		settings = nc.ocs("GET", "/ocs/v2.php/apps/spreed/api/v3/signaling/settings")
 		return HPBSettings(**settings)
 	except Exception as e:
-		print_exc()
 		raise Exception("Error getting HPB settings") from e

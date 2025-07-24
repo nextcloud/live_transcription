@@ -24,8 +24,8 @@ class StreamEndedException(Exception):
 class TranscribeRequest(BaseModel):
 	roomToken: str
 	sessionId: str
-	langId: str
 	enable: bool
+	langId: str = "en"
 
 
 class LanguageSetRequest(BaseModel):
@@ -36,3 +36,7 @@ class LanguageSetRequest(BaseModel):
 class Target(BaseModel):
 	# todo: any metadata or can be reduced to just a list of session ids?
 	...
+
+
+class SpreedClientException(Exception):
+	"""Base exception for SpreedClient errors."""
