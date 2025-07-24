@@ -494,18 +494,24 @@ class SpreedClient:
 		"""Handle incoming offer messages."""
 		print("Got offer from", message["message"]["sender"]["sessionid"], tag="offer", color="blue")
 
-		# todo: optional ice servers
-		ice_servers = RTCConfiguration(
-			iceServers=[
-				RTCIceServer(urls=self.hpb_settings.stunservers[0].urls),
+		ice_servers = []
+		for stunserver in self.hpb_settings.stunservers:
+			ice_servers.append(
+				RTCIceServer(urls=stunserver.urls)
+			)
+		for turnserver in self.hpb_settings.turnservers:
+			ice_servers.append(
 				RTCIceServer(
-					urls=self.hpb_settings.turnservers[0].urls,
-					username=self.hpb_settings.turnservers[0].username,
-					credential=self.hpb_settings.turnservers[0].credential,
-				),
-			],
-		)
-		pc = RTCPeerConnection(configuration=ice_servers)
+					urls=turnserver.urls,
+					username=turnserver.username,
+					credential=turnserver.credential,
+				)
+			)
+		if len(ice_servers) == 0:
+			ice_servers = None
+		rtc_config = RTCConfiguration(iceServers=ice_servers)
+		pc = RTCPeerConnection(configuration=rtc_config)
+
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
 		async def on_track(track):
