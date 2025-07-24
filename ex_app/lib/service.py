@@ -72,7 +72,8 @@ def get_ssl_context(server_addr: str) -> ssl.SSLContext | None:
 		print("Using default SSL context for insecure WebSocket connection (ws://)", tag="connection", color="blue")
 		return None
 
-	if os.environ.get("SKIP_CERT_VERIFY", "false").lower() == "true":
+	cert_verify = os.environ.get("SKIP_CERT_VERIFY", "false").lower()
+	if cert_verify in ("true", "1"):
 		print("Skipping certificate verification for WebSocket connection", tag="connection", color="blue")
 		ssl_ctx = ssl.SSLContext()
 		ssl_ctx.check_hostname = False
@@ -791,12 +792,13 @@ class Application:
 				self.hpb_settings,
 				req.langId,
 			)
-		self.spreed_clients[req.roomToken].add_target(req.sessionId)
+			self.spreed_clients[req.roomToken].add_target(req.sessionId)
 
 		tries = MAX_CONNECT_TRIES
 		last_exc = None
 		while tries > 0:
 			try:
+				self.spreed_clients_lock.acquire()
 				conn_result = await self.spreed_clients[req.roomToken].connect()
 				match conn_result:
 					case ConnectResult.SUCCESS:
@@ -837,6 +839,8 @@ class Application:
 				tries -= 1
 				last_exc = e
 				await asyncio.sleep(2)
+			finally:
+				self.spreed_clients_lock.release()
 
 		print(f"Failed to connect after {MAX_CONNECT_TRIES} attempts, giving up", tag="connection", color="red")
 		raise SpreedClientException(
