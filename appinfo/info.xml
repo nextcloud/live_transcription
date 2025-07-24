@@ -7,7 +7,7 @@
 	<![CDATA[Provides live transcriptions to Talk calls. High-performance backend is required for this app to work.]]>
 	</description>
 	<version>1.0.0</version>
-	<licence>MIT</licence>
+	<licence>agpl</licence>
 	<namespace>LiveTranscription</namespace>
 	<category>tools</category>
 	<website>https://github.com/nextcloud/live_transcription</website>
