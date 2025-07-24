@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Event
 
 # isort: off
-from livetypes import LanguageSetRequest, TranscribeRequest
+from livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest
 # isort: on
 
 from dotenv import load_dotenv
@@ -43,12 +43,19 @@ APP = FastAPI(lifespan=lifespan)
 # APP.add_middleware(AppAPIAuthMiddleware)  # set global AppAPI authentication middleware
 
 
+@APP.exception_handler(SpreedClientException)
+async def spreed_client_exception_handler(request, exc: SpreedClientException):
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc)},
+    )
+
+
 @APP.get("/enabled")
 async def get_enabled():
     return {"enabled": ENABLED.is_set()}
 
 
-# todo
 @APP.post("/setCallLanguage")
 async def set_call_language(req: LanguageSetRequest):
     ret = await SERVICE.set_call_language(req)
