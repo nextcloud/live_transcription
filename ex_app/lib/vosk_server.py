@@ -118,6 +118,11 @@ async def recognize(websocket: ws.ServerConnection):
 				if "language" in config:
 					# try to release the model if it was already loaded
 					if rec:
+						# check inside to ensure this is not the first message
+						if lang == config["language"]:
+							logging.info("Language already set to %s", lang)
+							await websocket.send('{"success" : true}')
+							continue
 						await maybe_release_model(lang)
 					lang = config["language"]
 					logging.info("Language set to %s", lang)
