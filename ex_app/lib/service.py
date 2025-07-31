@@ -800,10 +800,8 @@ class VoskTranscriber:
 					message=message,
 					speaker_session_id=self.__session_id,
 				))
-		except StreamEndedException:
-			print("Stream ended", tag="stream", color="red")
-		except MediaStreamError:
-			print("Audio stream is not live", tag="stream", color="red")
+		except (StreamEndedException, MediaStreamError):
+			print("Audio stream ended", tag="stream", color="blue")
 		except asyncio.CancelledError:
 			print("Audio task cancelled for session id:", self.__session_id, tag="transcriber", color="blue")
 			raise
@@ -811,18 +809,11 @@ class VoskTranscriber:
 			print("Error in transcriber", e, tag="transcriber", color="red")
 			print_exc()
 		finally:
+			print("Stopping audio transfer for session id:", self.__session_id, tag="vosk", color="blue")
 			async with self.__voskcon_lock:
 				print("Closing Vosk server connection for session id:", self.__session_id, tag="vosk", color="blue")
 				with suppress(Exception):
 					await self.__voskcon.send('{"eof" : 1}')
-				with suppress(Exception):
-					# flush the last frames in vosk and wait for the last messages
-					final_res = await asyncio.wait_for(self.__voskcon.recv(), MSG_RECEIVE_TIMEOUT)
-					if final_res:
-						self.__transcript_queue.put_nowait(Transcript(
-							message=final_res,
-							speaker_session_id=self.__session_id,
-						))
 				with suppress(Exception):
 					await self.__voskcon.close()
 					self.__voskcon = None
