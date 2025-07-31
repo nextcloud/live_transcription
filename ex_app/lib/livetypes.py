@@ -40,3 +40,11 @@ class Target(BaseModel):
 
 class SpreedClientException(Exception):
 	"""Base exception for SpreedClient errors."""
+
+
+class VoskException(Exception):
+	retcode: int
+
+	def __init__(self, message: str, retcode: int = 500):
+		super().__init__(message)
+		self.retcode = retcode

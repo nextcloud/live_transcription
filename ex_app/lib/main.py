@@ -1,16 +1,17 @@
 """Simplest example."""
 
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from threading import Event
 
 # isort: off
-from livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest
+from livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest, VoskException
 # isort: on
 
 from dotenv import load_dotenv
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, Body, FastAPI
 from fastapi.responses import JSONResponse
 from nc_py_api import NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, persistent_storage, run_app, set_handlers
@@ -58,10 +59,22 @@ async def get_enabled():
 
 @APP.post("/setCallLanguage")
 async def set_call_language(req: LanguageSetRequest):
-    ret = await SERVICE.set_call_language(req)
-    if ret:
+    try:
+        await SERVICE.set_call_language(req)
         return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
-    return JSONResponse(status_code=400, content={"error": "Failed to set language for the call"})
+    except VoskException as e:
+        print(f"VoskException during set_call_language: {e}", flush=True)
+        return JSONResponse(status_code=e.retcode, content={"error": str(e)})
+    except SpreedClientException:
+        raise
+    except Exception as e:
+        print(f"Exception during set_call_language: {e}", flush=True)
+        return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
+
+
+@APP.post("/leaveCall")
+async def leave_call(roomToken: str = Body(embed=True)):
+    SERVICE.leave_call(roomToken)
 
 
 @APP.post("/transcribeCall")
