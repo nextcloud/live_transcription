@@ -9,9 +9,12 @@ from contextlib import suppress
 from urllib.parse import urlparse
 
 import websockets as ws
+from dotenv import load_dotenv
 from models import MODELS_LIST
 from nc_py_api.ex_app import persistent_storage
 from vosk import GpuInit, GpuThreadInit, KaldiRecognizer, Model
+
+load_dotenv()
 
 THREAD_POOL_WORKERS = min(32, (os.cpu_count() or 1) + 4)
 if os.getenv("LT_MAX_WORKERS", "invalid").isnumeric():
