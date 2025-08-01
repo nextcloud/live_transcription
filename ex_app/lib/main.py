@@ -1,8 +1,7 @@
-"""Simplest example."""
+"""Live transcription app."""
 
-import asyncio
 import os
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Event
 
