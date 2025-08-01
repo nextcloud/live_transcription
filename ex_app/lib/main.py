@@ -13,6 +13,7 @@ from livetypes import LanguageSetRequest, SpreedClientException, TranscribeReque
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Body, FastAPI
 from fastapi.responses import JSONResponse
+from models import LANGUAGE_MAP, LanguageModel
 from nc_py_api import NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, LogLvl, persistent_storage, run_app, set_handlers
 from service import Application
@@ -80,6 +81,11 @@ async def leave_call(roomToken: str = Body(embed=True)):
 @APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest, bg: BackgroundTasks):
     bg.add_task(SERVICE.transcript_req, req)
+
+
+@APP.get("/getSupportedLanguages")
+async def get_supported_languages() -> dict[str, LanguageModel]:
+    return LANGUAGE_MAP
 
 
 def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:

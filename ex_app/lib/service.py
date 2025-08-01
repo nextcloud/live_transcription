@@ -33,6 +33,7 @@ from livetypes import (
 	TranscribeRequest,
 	VoskException,
 )
+from models import LANGUAGE_MAP
 from nc_py_api import NextcloudApp
 from print_color import print
 from websockets import ClientConnection
@@ -717,10 +718,16 @@ class VoskTranscriber:
 		if not self.__voskcon:
 			raise VoskException("Vosk connection is not established, cannot switch language")
 		if self.__language == language:
-			print(f"Language is already set to {language}, no need to switch", tag="vosk", color="blue")
+			print(
+				f"Language is already set to {LANGUAGE_MAP[language].name}, no need to switch",
+				tag="vosk", color="blue",
+			)
 			return
 
-		print(f"Switching Vosk language from {self.__language} to {language}", tag="vosk", color="blue")
+		print(
+			f"Switching Vosk language from {LANGUAGE_MAP[self.__language].name} to {LANGUAGE_MAP[language].name}",
+			tag="vosk", color="blue",
+		)
 		self.__language = language
 		async with self.__voskcon_lock:
 			await self.__voskcon.send(
@@ -751,7 +758,7 @@ class VoskTranscriber:
 		ret = json_res.get("success", False)
 		if not ret:
 			raise VoskException("Vosk server did not confirm language switch successfully", 400)
-		print(f"Vosk language switched to {language} successfully", tag="vosk", color="green")
+		print(f"Vosk language switched to {LANGUAGE_MAP[language].name} successfully", tag="vosk", color="green")
 
 
 	async def __run_audio_xfer(self, stream: AudioStream):
