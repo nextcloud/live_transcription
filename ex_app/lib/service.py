@@ -579,11 +579,15 @@ class SpreedClient:
 			return
 
 		with self.target_lock:
-			if len(self.targets) == 0:
-				print("No transcript receivers, leaving call", tag="maybe_leave_call", color="blue")
-				if not self._close_task:
-					self._close_task = asyncio.create_task(self.close())
-			self._deferred_close_task = None
+			len_targets = len(self.targets)
+		if len_targets == 0:
+			print(
+				f"No transcript receivers for {CALL_LEAVE_TIMEOUT}s, leaving the call",
+				tag="maybe_leave_call", color="blue",
+			)
+			if not self._close_task:
+				self._close_task = asyncio.create_task(self.close())
+		self._deferred_close_task = None
 
 	async def handle_offer(self, message):
 		"""Handle incoming offer messages."""
