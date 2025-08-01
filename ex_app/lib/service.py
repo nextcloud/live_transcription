@@ -426,6 +426,7 @@ class SpreedClient:
 		with self.target_lock:
 			if session_id not in self.targets:
 				self.targets[session_id] = Target()
+				print("Added target session id:", session_id, tag="target", color="blue")
 			else:
 				print(f"Target '{session_id}' already exists", tag="target", color="yellow")
 
@@ -433,6 +434,7 @@ class SpreedClient:
 		# todo: start timeout for leaving the call here
 		with self.target_lock:
 			if session_id in self.targets:
+				print("Removed target session id:", session_id, tag="target", color="blue")
 				del self.targets[session_id]
 			else:
 				print(f"Target '{session_id}' does not exist", tag="target", color="yellow")
@@ -485,7 +487,8 @@ class SpreedClient:
 				and message["event"]["target"] == "participants"
 				and message["event"]["type"] == "update"
 			):
-				print("Participants update!", tag="participants", color="blue")
+				print("Participants update!", message, tag="participants", color="blue")
+
 				if message["event"]["update"].get("all") and message["event"]["update"].get("incall") == 0:
 					print("Call ended for everyone, closing connection", tag="participants", color="blue")
 					if not self._close_task:
@@ -497,6 +500,20 @@ class SpreedClient:
 					continue
 
 				for user_desc in users_update:
+					if user_desc.get("internal", False):
+						continue
+
+					if user_desc["inCall"] == CALL_FLAG.DISCONNECTED:
+						print("User disconnected", user_desc, tag="participants", color="blue")
+						# the transcription should automatically stop when the audio track is closed
+						# cleaning it up in this class
+						if user_desc["sessionId"] in self.transcribers:
+							with self.transcriber_lock:
+								self.transcribers[user_desc["sessionId"]].shutdown()
+								del self.transcribers[user_desc["sessionId"]]
+						self.remove_target(user_desc["sessionId"])
+						continue
+
 					if (user_desc["inCall"] & CALL_FLAG.IN_CALL and user_desc["inCall"] & CALL_FLAG.WITH_AUDIO):
 						print("User join with audio", user_desc, tag="participants", color="blue")
 						await self.send_offer_request(user_desc["sessionId"])
@@ -511,6 +528,7 @@ class SpreedClient:
 						# false alarm, we are not the only one left
 						continue
 
+					# if we are the only one left, close the connection
 					transcriber_index = 0 if users_update[0].get("sessionId") == self.sessionid else 1
 					if (
 						users_update[transcriber_index].get("inCall") & CALL_FLAG.IN_CALL
@@ -544,7 +562,13 @@ class SpreedClient:
 	async def handle_offer(self, message):
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
-		print("Got offer from", spkr_sid, tag="offer", color="blue")
+		with self.peer_connection_lock:
+			if spkr_sid in self.peer_connections:
+				print(
+					f"Peer connection for {spkr_sid} already exists, skipping offer handling",
+					tag="offer", color="yellow",
+				)
+				return
 
 		ice_servers = []
 		for stunserver in self.hpb_settings.stunservers:
@@ -563,6 +587,15 @@ class SpreedClient:
 			ice_servers = None
 		rtc_config = RTCConfiguration(iceServers=ice_servers)
 		pc = RTCPeerConnection(configuration=rtc_config)
+
+		@pc.on("connectionstatechange")
+		async def on_connectionstatechange():
+			print(f"Peer connection for {spkr_sid} state change: {pc.connectionState}", tag="peer", color="blue")
+			if pc.connectionState in ("failed", "closed"):
+				print(f"Peer connection for {spkr_sid} is {pc.connectionState}", tag="peer", color="blue")
+				with self.peer_connection_lock:
+					if spkr_sid in self.peer_connections:
+						del self.peer_connections[spkr_sid]
 
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
