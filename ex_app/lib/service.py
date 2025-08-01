@@ -407,21 +407,18 @@ class SpreedClient:
 				await self._server.close()
 			self._server = None
 
-		self.defunct.set()
-		if not app_closing:
-			self.leave_call_cb(self.room_token)
+		if not using_resume:
+			self.defunct.set()
+			if not app_closing:
+				self.leave_call_cb(self.room_token)
 
 	async def receive(self, timeout: int = 0) -> dict | None:
 		if not self._server:
 			return None
 
-		# todo: handle exceptions
+		# caller handles the exceptions
 		if timeout > 0:
-			try:
-				received_msg = await asyncio.wait_for(self._server.recv(), timeout)
-			except TimeoutError:
-				print("Timeout while waiting for message", tag="timeout", color="red")
-				return None
+			received_msg = await asyncio.wait_for(self._server.recv(), timeout)
 		else:
 			received_msg = await self._server.recv()
 
@@ -573,17 +570,17 @@ class SpreedClient:
 
 	async def maybe_leave_call(self):
 		"""Leave the call if there are no targets."""
-		print("Waiting to leave call if there are no targets", tag="leave_call", color="blue")
+		print("Waiting to leave call if there are no targets", tag="maybe_leave_call", color="blue")
 		await asyncio.sleep(CALL_LEAVE_TIMEOUT)
 
 		if self.defunct.is_set():
-			print("SpreedClient is already defunct", tag="leave_call", color="blue")
+			print("SpreedClient is already defunct", tag="maybe_leave_call", color="blue")
 			self._deferred_close_task = None
 			return
 
 		with self.target_lock:
 			if len(self.targets) == 0:
-				print("No transcript receivers, leaving call", tag="leave_call", color="blue")
+				print("No transcript receivers, leaving call", tag="maybe_leave_call", color="blue")
 				if not self._close_task:
 					self._close_task = asyncio.create_task(self.close())
 			self._deferred_close_task = None
@@ -918,7 +915,7 @@ class Application:
 				req.roomToken,
 				self.hpb_settings,
 				req.langId,
-				self.leave_call,
+				self.__leave_call_cb,
 			)
 			self.spreed_clients[req.roomToken].add_target(req.sessionId)
 
@@ -985,7 +982,22 @@ class Application:
 			spreed_client = self.spreed_clients[req.roomToken]
 			await spreed_client.set_language(req.langId)
 
-	def leave_call(self, room_token: str):
+	async def leave_call(self, room_token: str):
+		"""Leave the call for the given room token. Called from an API endpoint."""
+		if room_token not in self.spreed_clients:
+			print(f"No SpreedClient for room token {room_token} active", tag="connection", color="blue")
+			return
+
+		with self.spreed_clients_lock:
+			spreed_client = self.spreed_clients[room_token]
+			if spreed_client.defunct.is_set():
+				print(f"SpreedClient for room token {room_token} is already defunct", tag="connection", color="blue")
+				return
+
+			await spreed_client.close(using_resume=False)
+			print(f"Left call for room token {room_token}", tag="connection", color="blue")
+
+	def __leave_call_cb(self, room_token: str):
 		with self.spreed_clients_lock:
 			if room_token not in self.spreed_clients:
 				print(f"No SpreedClient for room token {room_token} active", tag="connection", color="blue")

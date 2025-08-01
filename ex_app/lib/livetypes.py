@@ -24,7 +24,7 @@ class StreamEndedException(Exception):
 class TranscribeRequest(BaseModel):
 	roomToken: str
 	sessionId: str
-	enable: bool
+	enable: bool = True
 	langId: str = "en"
 
 
