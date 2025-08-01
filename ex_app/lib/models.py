@@ -1,3 +1,5 @@
+from pydantic import BaseModel, Field
+
 MODELS_LIST = {
 	"br": "vosk-model-br-0.8",
 	"ca": "vosk-model-small-ca-0.4",
@@ -24,4 +26,51 @@ MODELS_LIST = {
 	"uk": "vosk-model-small-uk-v3-nano",
 	"uz": "vosk-model-small-uz-0.22",
 	"vn": "vosk-model-small-vn-0.4",
+}
+
+
+class LanguageMetadata(BaseModel):
+	separator: str = Field(" ", description="Separator used in the language")
+
+class LanguageModel(BaseModel):
+	name: str = Field(..., description="Name of the language")
+	metadata: LanguageMetadata = Field(default_factory=LanguageMetadata, description="Metadata for the language")
+
+
+LANGUAGE_MAP = {
+	"br": LanguageModel(name="Breton (BR)"),
+	"ca": LanguageModel(name="Catalan (CA)"),
+	"cs": LanguageModel(name="Czech (CS)"),
+	"cn": LanguageModel(
+		name="Chinese (CN)",
+		metadata=LanguageMetadata(
+			separator="",
+		),
+	),
+	"de": LanguageModel(name="German (DE)"),
+	"en": LanguageModel(name="English (EN)"),
+	"eo": LanguageModel(name="Esperanto (EO)"),
+	"es": LanguageModel(name="Spanish (ES)"),
+	"fa": LanguageModel(name="Persian (FA)"),
+	"fr": LanguageModel(name="French (FR)"),
+	"hi": LanguageModel(name="Hindi (HI)"),
+	"it": LanguageModel(name="Italian (IT)"),
+	"ja": LanguageModel(
+		name="Japanese (JA)",
+		metadata=LanguageMetadata(
+			separator="",
+		),
+	),
+	"ko": LanguageModel(name="Korean (KO)"),
+	"kz": LanguageModel(name="Kazakh (KZ)"),
+	"nl": LanguageModel(name="Dutch (NL)"),
+	"pl": LanguageModel(name="Polish (PL)"),
+	"pt": LanguageModel(name="Portuguese (PT)"),
+	"ru": LanguageModel(name="Russian (RU)"),
+	"te": LanguageModel(name="Telugu (TE)"),
+	"tg": LanguageModel(name="Tajik (TG)"),
+	"tr": LanguageModel(name="Turkish (TR)"),
+	"uk": LanguageModel(name="Ukrainian (UK)"),
+	"uz": LanguageModel(name="Uzbek (UZ)"),
+	"vn": LanguageModel(name="Vietnamese (VN)"),
 }
