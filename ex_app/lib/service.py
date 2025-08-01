@@ -47,6 +47,7 @@ MSG_RECEIVE_TIMEOUT = 10  # seconds
 MAX_CONNECT_TRIES = 5  # maximum number of connection attempts
 MAX_AUDIO_FRAMES = 20  # maximum number of audio frames to collect before sending to Vosk
 HPB_SHUTDOWN_TIMEOUT = 30  # seconds to wait for the ws connectino to shut down gracefully
+CALL_LEAVE_TIMEOUT = 60  # seconds to wait before leaving the call if there are no targets
 
 
 class CALL_FLAG(IntEnum):
@@ -144,12 +145,13 @@ class SpreedClient:
 		self.peer_connections: dict[str, PeerConnection] = {}
 		self.peer_connection_lock = threading.Lock()
 		self.targets: dict[str, Target] = {}
-		self.target_lock = threading.RLock()
+		self.target_lock = threading.Lock()
 		self.transcript_queue = asyncio.Queue()
 		self.transcribers: dict[str, VoskTranscriber] = {}
 		self.transcriber_lock = threading.Lock()
 		self.defunct = threading.Event()
 		self._close_task: asyncio.Task | None = None
+		self._deferred_close_task: asyncio.Task | None = None
 
 		self.resumeid = None
 		self.sessionid = None
@@ -212,6 +214,8 @@ class SpreedClient:
 
 		self._monitor = asyncio.create_task(self.signalling_monitor())
 		self._transcript_sender = asyncio.create_task(self.transcipt_queue_consumer())
+		# leave the call if there are no targets after some time
+		self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
 
 		await self.send_incall()
 		await self.send_join()
@@ -362,37 +366,43 @@ class SpreedClient:
 		app_closing = self._monitor.cancelled() if self._monitor else False
 
 		with suppress(Exception):
+			if self._monitor and not self._monitor.done():
+				print("Cancelling monitor task", tag="monitor", color="blue")
+				# Cancel the monitor task if it's still running
+				self._monitor.cancel()
+			self._monitor = None
+
+		with suppress(Exception):
 			await self.send_bye()
 
-		if not using_resume:
-			with self.peer_connection_lock:
+		with suppress(Exception):
+			if not using_resume:
 				for pc in self.peer_connections.values():
 					if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
 						print(f"Closing peer connection for session {pc.session_id}", tag="connection", color="blue")
 						with suppress(Exception):
 							await pc.pc.close()
-				self.peer_connections.clear()
-			self.resumeid = None
-			self.sessionid = None
+				with self.peer_connection_lock:
+					self.peer_connections.clear()
+				self.resumeid = None
+				self.sessionid = None
 
 		with suppress(Exception):
-			if self._monitor and not self._monitor.done():
-				print("Cancelling monitor task", tag="monitor", color="blue")
-				# Cancel the monitor task if it's still running
-				self._monitor.cancel()
-				self._monitor = None
-
+			print("Shutting down all transcribers", tag="transcriber", color="blue")
+			for transcriber in self.transcribers.values():
+				transcriber.shutdown()
 			with self.transcriber_lock:
-				for transcriber in self.transcribers.values():
-					transcriber.shutdown()
+				self.transcribers.clear()
 
+		with suppress(Exception):
 			if self._transcript_sender and not self._transcript_sender.done():
-				print("Cancelling transcript consumer task", tag="consumer", color="blue")
+				print("Cancelling transcript consumer task", tag="consumer", color="blue", flush=True)
 				self._transcript_sender.cancel()
 				self._transcript_sender = None
 
+		with suppress(Exception):
 			if self._server and self._server.state == WsState.OPEN:
-				print("Closing server connection", tag="connection", color="blue")
+				print("Closing server connection", tag="connection", color="blue", flush=True)
 				# Close the WebSocket connection if it's still open
 				await self._server.close()
 			self._server = None
@@ -429,19 +439,21 @@ class SpreedClient:
 				print("Added target session id:", session_id, tag="target", color="blue")
 			else:
 				print(f"Target '{session_id}' already exists", tag="target", color="yellow")
+			if self._deferred_close_task:
+				self._deferred_close_task.cancel()
+				self._deferred_close_task = None
 
 	def remove_target(self, session_id: str):
-		# todo: start timeout for leaving the call here
 		with self.target_lock:
 			if session_id in self.targets:
 				print("Removed target session id:", session_id, tag="target", color="blue")
 				del self.targets[session_id]
+				if len(self.targets) == 0:
+					if self._deferred_close_task:
+						self._deferred_close_task.cancel()
+					self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
 			else:
 				print(f"Target '{session_id}' does not exist", tag="target", color="yellow")
-
-	def is_target(self, session_id: str) -> bool:
-		with self.target_lock:
-			return session_id in self.targets
 
 	async def signalling_monitor(self):
 		"""Monitor the signaling server for incoming messages."""
@@ -559,6 +571,23 @@ class SpreedClient:
 				if not self._close_task:
 					self._close_task = asyncio.create_task(self.close())
 
+	async def maybe_leave_call(self):
+		"""Leave the call if there are no targets."""
+		print("Waiting to leave call if there are no targets", tag="leave_call", color="blue")
+		await asyncio.sleep(CALL_LEAVE_TIMEOUT)
+
+		if self.defunct.is_set():
+			print("SpreedClient is already defunct", tag="leave_call", color="blue")
+			self._deferred_close_task = None
+			return
+
+		with self.target_lock:
+			if len(self.targets) == 0:
+				print("No transcript receivers, leaving call", tag="leave_call", color="blue")
+				if not self._close_task:
+					self._close_task = asyncio.create_task(self.close())
+			self._deferred_close_task = None
+
 	async def handle_offer(self, message):
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
@@ -647,11 +676,12 @@ class SpreedClient:
 	async def set_language(self, lang_id: str):
 		excs = []
 		with self.transcriber_lock:
-			try:
-				for transcriber in self.transcribers.values():
-					await transcriber.set_language(lang_id)
-			except Exception as e:
-				excs.append(e)
+			transcribers = list(self.transcribers.values())
+		try:
+			for transcriber in transcribers:
+				await transcriber.set_language(lang_id)
+		except Exception as e:
+			excs.append(e)
 		if len(excs) > 1:
 			raise VoskException("Failed to set language for multiple transcribers", retcode=500)
 		if len(excs) == 1:
