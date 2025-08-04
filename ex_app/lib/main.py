@@ -22,7 +22,7 @@ load_dotenv()
 SERVICE: Application
 ENABLED = Event()
 MODELS_TO_FETCH = {
-    "Nextcloud-AI/vosk-models": {
+	"Nextcloud-AI/vosk-models": {
 		"local_dir": persistent_storage(),
 		"revision": "22028d0a4474d7fc210cf7867da9eac6e3eb22e0",
 	}
@@ -32,13 +32,13 @@ MODELS_TO_FETCH = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global SERVICE
-    set_handlers(app, enabled_handler, models_to_fetch=MODELS_TO_FETCH)
-    SERVICE = Application()
-    nc = NextcloudApp()
-    if nc.enabled_state:
-        ENABLED.set()
-    yield
+	global SERVICE
+	set_handlers(app, enabled_handler, models_to_fetch=MODELS_TO_FETCH)
+	SERVICE = Application()
+	nc = NextcloudApp()
+	if nc.enabled_state:
+		ENABLED.set()
+	yield
 
 
 APP = FastAPI(lifespan=lifespan)
@@ -47,58 +47,58 @@ ROUTER = APIRouter(prefix="/api/v1", tags=["v1"])
 
 @APP.exception_handler(SpreedClientException)
 async def spreed_client_exception_handler(request, exc: SpreedClientException):
-    return JSONResponse(
-        status_code=500,
-        content={"error": str(exc)},
-    )
+	return JSONResponse(
+		status_code=500,
+		content={"error": str(exc)},
+	)
 
 
 @APP.get("/enabled")
 async def get_enabled():
-    return {"enabled": ENABLED.is_set()}
+	return {"enabled": ENABLED.is_set()}
 
 
 @ROUTER.post("/call/set-language")
 async def set_call_language(req: LanguageSetRequest):
-    try:
-        await SERVICE.set_call_language(req)
-        return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
-    except VoskException as e:
-        print(f"VoskException during set_call_language: {e}", flush=True)
-        return JSONResponse(status_code=e.retcode, content={"error": str(e)})
-    except SpreedClientException:
-        raise
-    except Exception as e:
-        print(f"Exception during set_call_language: {e}", flush=True)
-        return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
+	try:
+		await SERVICE.set_call_language(req)
+		return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
+	except VoskException as e:
+		print(f"VoskException during set_call_language: {e}", flush=True)
+		return JSONResponse(status_code=e.retcode, content={"error": str(e)})
+	except SpreedClientException:
+		raise
+	except Exception as e:
+		print(f"Exception during set_call_language: {e}", flush=True)
+		return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
 
 
 @ROUTER.post("/call/leave")
 async def leave_call(roomToken: str = Body(embed=True)):
-    await SERVICE.leave_call(roomToken)
+	await SERVICE.leave_call(roomToken)
 
 
 @ROUTER.post("/call/transcribe")
 async def transcribe_call(req: TranscribeRequest):
-    await SERVICE.transcript_req(req)
+	await SERVICE.transcript_req(req)
 
 
 @ROUTER.get("/languages")
 def get_supported_languages() -> dict[str, LanguageModel]:
-    return LANGUAGE_MAP
+	return LANGUAGE_MAP
 
 
 def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
-    print(f"enabled={enabled}", flush=True)
-    if enabled:
-        ENABLED.set()
-    else:
-        ENABLED.clear()
-    return ""
+	print(f"enabled={enabled}", flush=True)
+	if enabled:
+		ENABLED.set()
+	else:
+		ENABLED.clear()
+	return ""
 
 
 APP.include_router(ROUTER)
 
 if __name__ == "__main__":
-    os.chdir(Path(__file__).parent)
-    run_app("main:APP", log_level="info")
+	os.chdir(Path(__file__).parent)
+	run_app("main:APP", log_level="info")
