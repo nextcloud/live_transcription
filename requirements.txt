@@ -1,9 +1,11 @@
 aiortc
 av
 dotenv
+huggingface_hub
 nc_py_api
 print_color
 pydantic
+ruamel.yaml
 uvicorn
 vosk
 websockets
