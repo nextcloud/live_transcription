@@ -1,5 +1,8 @@
 #!/bin/bash
 
+set -e
+
+# FRP
 if [ -f /frpc.toml ] && [ -n "$HP_SHARED_KEY" ]; then
   if pgrep -x "frpc" > /dev/null; then
     exit 0
@@ -8,4 +11,7 @@ if [ -f /frpc.toml ] && [ -n "$HP_SHARED_KEY" ]; then
   fi
 fi
 
-# todo: app and vosk server health checks
+# main app
+curl -sSf "http://$APP_HOST:$APP_PORT/heartbeat" > /dev/null
+
+# todo: vosk server
