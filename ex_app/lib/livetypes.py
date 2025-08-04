@@ -34,7 +34,6 @@ class LanguageSetRequest(BaseModel):
 
 
 class Target(BaseModel):
-	# todo: any metadata or can be reduced to just a list of session ids?
 	...
 
 

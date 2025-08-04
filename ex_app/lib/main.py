@@ -1,5 +1,6 @@
 """Live transcription app."""
 
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,16 +10,20 @@ from threading import Event
 from livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest, VoskException
 # isort: on
 
+import uvicorn
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
+from logger import get_logging_config, setup_logging
 from models import LANGUAGE_MAP, LanguageModel
 from nc_py_api import NextcloudApp
-from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers
+from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers, setup_nextcloud_logging
 from service import Application
 
 load_dotenv()
+LOGGER_CONFIG_NAME = "../../logger_config.yaml"
+LOGGER = logging.getLogger("lt")
 SERVICE: Application
 ENABLED = Event()
 MODELS_TO_FETCH = {
@@ -38,6 +43,7 @@ async def lifespan(app: FastAPI):
 	nc = NextcloudApp()
 	if nc.enabled_state:
 		ENABLED.set()
+	LOGGER.info("App is %s on startup", "enabled" if ENABLED.is_set() else "disabled")
 	yield
 
 
@@ -64,12 +70,12 @@ async def set_call_language(req: LanguageSetRequest):
 		await SERVICE.set_call_language(req)
 		return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
 	except VoskException as e:
-		print(f"VoskException during set_call_language: {e}", flush=True)
+		LOGGER.exception("VoskException during set_call_language", exc_info=e)
 		return JSONResponse(status_code=e.retcode, content={"error": str(e)})
 	except SpreedClientException:
 		raise
 	except Exception as e:
-		print(f"Exception during set_call_language: {e}", flush=True)
+		LOGGER.exception("Exception during set_call_language", exc_info=e)
 		return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
 
 
@@ -101,4 +107,16 @@ APP.include_router(ROUTER)
 
 if __name__ == "__main__":
 	os.chdir(Path(__file__).parent)
+
+	logging_config = get_logging_config(LOGGER_CONFIG_NAME)
+	setup_logging(logging_config)
+	setup_nextcloud_logging("lt", logging.WARNING)
+
+	uv_log_config = uvicorn.config.LOGGING_CONFIG  # pyright: ignore[reportAttributeAccessIssue]
+	uv_log_config["formatters"]["json"] = logging_config["formatters"]["json"]
+	uv_log_config["handlers"]["file_json"] = logging_config["handlers"]["file_json"]
+
+	uv_log_config["loggers"]["uvicorn"]["handlers"].append("file_json")
+	uv_log_config["loggers"]["uvicorn.access"]["handlers"].append("file_json")
+
 	run_app("main:APP", log_level="info")
