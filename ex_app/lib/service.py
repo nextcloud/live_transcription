@@ -1062,7 +1062,8 @@ def check_hpb_env_vars():
 def get_hpb_settings() -> HPBSettings:
 	check_hpb_env_vars()
 	try:
-		nc = NextcloudApp()
+		cert_verify = os.environ.get("SKIP_CERT_VERIFY", "false").lower()
+		nc = NextcloudApp(npa_nc_cert=False) if cert_verify in ("true", "1") else NextcloudApp()
 		settings = nc.ocs("GET", "/ocs/v2.php/apps/spreed/api/v3/signaling/settings")
 		return HPBSettings(**settings)
 	except Exception as e:
