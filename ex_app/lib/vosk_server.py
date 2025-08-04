@@ -12,7 +12,7 @@ import websockets as ws
 from dotenv import load_dotenv
 from models import MODELS_LIST
 from nc_py_api.ex_app import persistent_storage
-from vosk import GpuInit, GpuThreadInit, KaldiRecognizer, Model
+from vosk import KaldiRecognizer, Model
 
 load_dotenv()
 
@@ -172,6 +172,7 @@ async def start():
 	port = vosk_parsed_url.port or 2702
 
 	if os.environ.get("COMPUTE_DEVICE", "cpu").lower() == "cuda":
+		from vosk import GpuInit, GpuThreadInit
 		GpuInit()
 		pool = concurrent.futures.ThreadPoolExecutor(
 			max_workers=THREAD_POOL_WORKERS,
