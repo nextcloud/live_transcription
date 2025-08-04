@@ -82,7 +82,7 @@ For Julius' docker dev, this should go into `data/nginx/vhost.d/nextcloud.local_
 
 Small issue: The entire nginx stack fails to work if `spreedbackend` is not reachable/resolvable. Using a variable can fix this but I haven't got it to work yet. For now, make sure to have the HPB server running to avoid this issue, or use a static IP address.
 
-6. In Talk, the HPB URL would be `https://nextcloud.local/standalone-signaling/` and the shared secret would be `1234`. Replace `nextcloud.local` here if you're not using the docker dev setup. `http` can also be used but microphone is not allowed in the browser for insecure connections.
+6. In Talk, the HPB URL would be `https://nextcloud.local/standalone-signaling/` and the shared secret would be `4567`. Replace `nextcloud.local` here if you're not using the docker dev setup. `http` can also be used but microphone is not allowed in the browser for insecure connections.
 
 TURN server setup would looks like:
 
