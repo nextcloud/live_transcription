@@ -74,7 +74,7 @@ def hmac_sha256(key, message):
 def get_ssl_context(server_addr: str) -> ssl.SSLContext | None:
 	nc = NextcloudApp()
 
-	if server_addr.startswith("ws://"):
+	if server_addr.startswith(("ws://", "http://")):
 		LOGGER.info("Using default SSL context for insecure WebSocket connection (ws://)", extra={
 			"server_addr": server_addr,
 			"tag": "connection",
@@ -1319,8 +1319,7 @@ def check_hpb_env_vars():
 def get_hpb_settings() -> HPBSettings:
 	check_hpb_env_vars()
 	try:
-		cert_verify = os.environ.get("SKIP_CERT_VERIFY", "false").lower()
-		nc = NextcloudApp(npa_nc_cert=False) if cert_verify in ("true", "1") else NextcloudApp()
+		nc = NextcloudApp(npa_nc_cert=get_ssl_context(f"${os.environ['NEXTCLOUD_URL']}"))
 		settings = nc.ocs("GET", "/ocs/v2.php/apps/spreed/api/v3/signaling/settings")
 		hpb_settings = HPBSettings(**settings)
 		LOGGER.debug("HPB settings retrieved successfully", extra={
