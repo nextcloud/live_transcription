@@ -14,7 +14,6 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRouter
 from logger import get_logging_config, setup_logging
 from models import LANGUAGE_MAP, LanguageModel
 from nc_py_api import NextcloudApp
@@ -49,7 +48,6 @@ async def lifespan(app: FastAPI):
 
 APP = FastAPI(lifespan=lifespan)
 APP.add_middleware(AppAPIAuthMiddleware)  # set global AppAPI authentication middleware
-ROUTER = APIRouter(prefix="/api/v1", tags=["v1"])
 
 @APP.exception_handler(SpreedClientException)
 async def spreed_client_exception_handler(request, exc: SpreedClientException):
@@ -64,7 +62,7 @@ async def get_enabled():
 	return {"enabled": ENABLED.is_set()}
 
 
-@ROUTER.post("/call/set-language")
+@APP.post("/setCallLanguage")
 async def set_call_language(req: LanguageSetRequest):
 	try:
 		await SERVICE.set_call_language(req)
@@ -79,17 +77,17 @@ async def set_call_language(req: LanguageSetRequest):
 		return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
 
 
-@ROUTER.post("/call/leave")
+@APP.post("/leaveCall")
 async def leave_call(roomToken: str = Body(embed=True)):
 	await SERVICE.leave_call(roomToken)
 
 
-@ROUTER.post("/call/transcribe")
+@APP.post("/transcribeCall")
 async def transcribe_call(req: TranscribeRequest):
 	await SERVICE.transcript_req(req)
 
 
-@ROUTER.get("/languages")
+@APP.get("/getSupportedLanguages")
 def get_supported_languages() -> dict[str, LanguageModel]:
 	return LANGUAGE_MAP
 
@@ -102,8 +100,6 @@ def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
 		ENABLED.clear()
 	return ""
 
-
-APP.include_router(ROUTER)
 
 if __name__ == "__main__":
 	os.chdir(Path(__file__).parent)
