@@ -51,9 +51,7 @@ RUN set -ex; \
 # Copy requirements and install Python dependencies using a cache mount.
 COPY requirements.txt /
 RUN python3 -m venv /venv
-# TODO
-#RUN --mount=type=cache,target=/root/.cache/pip \
-RUN \
+RUN --mount=type=cache,target=/root/.cache/pip \
     /venv/bin/python3 -m pip install --root-user-action=ignore -r requirements.txt && rm requirements.txt
 
 RUN \
