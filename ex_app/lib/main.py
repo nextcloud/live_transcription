@@ -101,4 +101,4 @@ APP.include_router(ROUTER)
 
 if __name__ == "__main__":
     os.chdir(Path(__file__).parent)
-    run_app("main:APP", log_level="trace")
+    run_app("main:APP", log_level="info")
