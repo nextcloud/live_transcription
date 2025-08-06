@@ -13,6 +13,8 @@ max-complexity = 12
 
 [tool.isort]
 profile = "black"
+indent = "tab"
+line_length = 120
 
 [tool.pylint]
 master.py-version = "3.11"

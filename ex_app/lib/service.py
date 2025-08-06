@@ -553,7 +553,7 @@ class SpreedClient:
 					"tag": "target",
 				})
 
-	async def signalling_monitor(self):
+	async def signalling_monitor(self):  # noqa: C901
 		"""Monitor the signaling server for incoming messages."""
 		while True:
 			if self.defunct.is_set():
@@ -745,7 +745,7 @@ class SpreedClient:
 				self._close_task = asyncio.create_task(self.close())
 		self._deferred_close_task = None
 
-	async def handle_offer(self, message):
+	async def handle_offer(self, message):  # noqa: C901
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
 		with self.peer_connection_lock:
@@ -810,8 +810,8 @@ class SpreedClient:
 
 					try:
 						await self.transcribers[spkr_sid].connect()
-					except Exception as e:
-						LOGGER.exception("Error connecting to Vosk server. Cannot continue further.", exc_info=e, extra={
+					except Exception:
+						LOGGER.exception("Error connecting to Vosk server. Cannot continue further.", extra={
 							"server_url": os.getenv("LT_VOSK_SERVER_URL", "ws://localhost:2702"),
 							"session_id": spkr_sid,
 							"room_token": self.room_token,
@@ -1047,7 +1047,7 @@ class VoskTranscriber:
 		})
 
 
-	async def __run_audio_xfer(self, stream: AudioStream):
+	async def __run_audio_xfer(self, stream: AudioStream):  # noqa: C901
 		frames = []
 		try:
 			while True:
