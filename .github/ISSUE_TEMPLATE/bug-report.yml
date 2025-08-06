@@ -1,0 +1,72 @@
+# SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: 🐞 Bug Report
+description: Create a bug report for Live Transcription.
+labels: [ 'bug' ]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug report! Please check the documentation in case there is already an
+        existing solution for your issue [here](https://docs.nextcloud.com/server/latest/admin_manual/ai/app_live_transcription.html).
+        Please fill out this form as completely as possible.
+  - type: input
+    attributes:
+      label: Which version of Nextcloud are you using?
+      description: 'Can be found with the command `occ status | grep version`. For example: v23.0.1'
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Which version of Live Transcription are you using?
+      description: 'Can be found with the command `occ app_api:app:list | grep live_transcription`. For example: 1.0.0'
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Which version of Nextcloud Talk are you using?
+      description: 'Can be found with the command `occ app:list | grep spreed`. For example: 1.0.0'
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Nextcloud deployment method?
+      description: 'eg. apache, bare-metal, AIO, docker-compose'
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is and what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: To Reproduce
+      description: Steps to reproduce the behavior, please provide a clear number of steps that always reproduces the issue. Screenshots can be provided here.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: |
+        Before posting the issue go through the steps you've written down to make sure the steps provided are detailed and clear.
+        Contributors should be able to follow the steps provided in order to reproduce the bug.
+  - type: textarea
+    attributes:
+      label: Server logs
+      description: |
+        Provide relevant Nextcloud server log entries (e.g. from the time period you reproduced the problem).
+        Copy full individual entries from `data/nextcloud.log` or use `Copy raw entry` from `/settings/admin/logging` section:
+        > NOTE: This will be automatically formatted into code for better readability.
+      render: json
+  - type: textarea
+    attributes:
+      label: Ex-App logs
+      description: |
+        Provide relevant logs from the Ex-App, if available. This can help in diagnosing issues specific to the Live Transcription app.
+        Copy full individual entries from the Ex-App log file found at `/nc_app_live_transcription/logs/lt.log`. This command can be used to view the last 100 entries:
+        ```bash
+        docker exec nc_app_live_transcription tail -n 100 /nc_app_live_transcription_data/logs/lt.log
+        ```
+        > NOTE: This will be automatically formatted into code for better readability.
+      render: json

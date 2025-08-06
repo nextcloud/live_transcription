@@ -1,5 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
 ci:
-  skip: [pylint]
+  skip: [ pylint, mypy ]
 
 exclude: '^ex_app/(img|js)/|.*\.phar'
 repos:
@@ -7,9 +9,12 @@ repos:
     rev: v5.0.0
     hooks:
     -   id: check-yaml
+    -   id: check-toml
     -   id: end-of-file-fixer
     -   id: trailing-whitespace
     -   id: mixed-line-ending
+    -   id: end-of-file-fixer
+        exclude: persistent_storage
 
 -   repo: https://github.com/PyCQA/isort
     rev: 6.0.1
@@ -17,27 +22,35 @@ repos:
     -   id: isort
         files: ex_app/lib/
 
--   repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
-    -   id: black
-        files: ex_app/lib/
-
 -   repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.11.8
     hooks:
     -   id: ruff
 
+-   repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
+
 -   repo: local
     hooks:
-    -   id: pylint
-        name: pylint
-        entry: pylint --recursive=y "ex_app/lib/"
+    -   id: mypy
+        name: mypy
+        entry: mypy ex_app/lib/
         language: system
         types: [ python ]
         pass_filenames: false
-        args:
-            [
-                "-rn", # Only display messages
-                "-sn", # Don't display the score
-            ]
+
+#-   repo: local
+#    hooks:
+#    -   id: pylint
+#        name: pylint
+#        entry: pylint --recursive=y "ex_app/lib/"
+#        language: system
+#        types: [ python ]
+#        pass_filenames: false
+#        args:
+#            [
+#                "-rn", # Only display messages
+#                "-sn", # Don't display the score
+#            ]

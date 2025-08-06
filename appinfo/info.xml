@@ -1,10 +1,14 @@
 <?xml version="1.0"?>
+<!--
+  - SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+  - SPDX-License-Identifier: AGPL-3.0-or-later
+-->
 <info>
 	<id>live_transcription</id>
-	<name>Live Transcription</name>
-	<summary>Provides live transcriptions to Talk calls.</summary>
+	<name>Live Transcription in Talk</name>
+	<summary>Provides live transcriptions in Nextcloud Talk calls.</summary>
 	<description>
-	<![CDATA[Provides live transcriptions to Talk calls. High-performance backend is required for this app to work.]]>
+	<![CDATA[Provides live transcriptions in Nextcloud Talk calls. High-performance backend (HPB) is required for this app to work.]]>
 	</description>
 	<version>1.0.0</version>
 	<licence>agpl</licence>
@@ -14,7 +18,7 @@
 	<bugs>https://github.com/nextcloud/live_transcription/issues</bugs>
 	<repository type="git">https://github.com/nextcloud/live_transcription</repository>
 	<dependencies>
-		<nextcloud min-version="30" max-version="32"/>
+		<nextcloud min-version="32" max-version="32"/>
 	</dependencies>
 	<external-app>
 		<docker-install>
