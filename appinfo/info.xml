@@ -19,7 +19,7 @@
 	<external-app>
 		<docker-install>
 			<registry>ghcr.io</registry>
-			<image>nextcloud/live_transcription</image>
+			<image>nextcloud-releases/live_transcription</image>
 			<image-tag>1.0.0</image-tag>
 		</docker-install>
 		<environment-variables>

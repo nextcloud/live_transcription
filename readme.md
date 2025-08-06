@@ -7,7 +7,7 @@ The description of each variable other than AppAPI variables is in the `appinfo/
 
 ### Dev Docker Setup
 
-1. `docker build -t ghcr.io/nextcloud/live_transcription .`
+1. `docker build -t ghcr.io/nextcloud-releases/live_transcription .`
 2. Register a HaRP/Docker socket proxy deploy daemon:
    https://docs.nextcloud.com/server/latest/admin_manual/exapps_management/AppAPIAndExternalApps.html
    https://docs.nextcloud.com/server/latest/admin_manual/exapps_management/DeployConfigurations.html
