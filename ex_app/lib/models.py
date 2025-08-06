@@ -30,7 +30,7 @@ MODELS_LIST = {
 
 
 class LanguageMetadata(BaseModel):
-	separator: str = Field(" ", description="Separator used in the language")
+	separator: str = Field(default=" ", description="Separator used in the language")
 
 class LanguageModel(BaseModel):
 	name: str = Field(..., description="Name of the language")

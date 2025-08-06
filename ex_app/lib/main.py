@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from logger import get_logging_config, setup_logging
 from models import LANGUAGE_MAP, LanguageModel
-from nc_py_api import NextcloudApp
+from nc_py_api import NextcloudApp, AsyncNextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers, setup_nextcloud_logging
 from service import Application
 
@@ -94,7 +94,7 @@ def get_supported_languages() -> dict[str, LanguageModel]:
 	return LANGUAGE_MAP
 
 
-def enabled_handler(enabled: bool, nc: NextcloudApp) -> str:
+def enabled_handler(enabled: bool, nc: NextcloudApp | AsyncNextcloudApp) -> str:
 	print(f"enabled={enabled}", flush=True)
 	if enabled:
 		ENABLED.set()

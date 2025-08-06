@@ -158,7 +158,8 @@ class SpreedClient:
 		self.peer_connection_lock = threading.Lock()
 		self.targets: dict[str, Target] = {}
 		self.target_lock = threading.Lock()
-		self.transcript_queue = asyncio.Queue()
+		self.transcript_queue: asyncio.Queue = asyncio.Queue()
+		self._transcript_sender: asyncio.Task | None = None
 		self.transcribers: dict[str, VoskTranscriber] = {}
 		self.transcriber_lock = threading.Lock()
 		self.defunct = threading.Event()
@@ -881,7 +882,7 @@ class SpreedClient:
 			"tag": "transcript",
 		})
 		while True:
-			transcript: Transcript = await self.transcript_queue.get()
+			transcript: Transcript = await self.transcript_queue.get()  # type: ignore[annotation-unchecked]
 
 			try:
 				await asyncio.wait_for(
@@ -930,7 +931,7 @@ class VoskTranscriber:
 	async def connect(self):
 		ssl_ctx = get_ssl_context(self.__server_url)
 		async with self.__voskcon_lock:
-			self.__voskcon: ClientConnection | None = await connect(
+			self.__voskcon: ClientConnection | None = await connect(  # type: ignore[annotation-unchecked]
 				self.__server_url,
 				*({
 					"server_hostname": urlparse(self.__server_url).hostname,
@@ -1061,6 +1062,8 @@ class VoskTranscriber:
 				frames.clear()
 
 				async with self.__voskcon_lock:
+					if not self.__voskcon:
+						raise Exception("Vosk connection is not established, cannot send audio data")
 					await self.__voskcon.send(bytes(dataframes))
 					result = await self.__voskcon.recv()
 
@@ -1103,15 +1106,16 @@ class VoskTranscriber:
 			})
 		finally:
 			async with self.__voskcon_lock:
-				LOGGER.debug("Closing Vosk server connection for session id: %s", self.__session_id, extra={
-					"session_id": self.__session_id,
-					"tag": "vosk",
-				})
-				with suppress(Exception):
-					await self.__voskcon.send('{"eof" : 1}')
-				with suppress(Exception):
-					await self.__voskcon.close()
-					self.__voskcon = None
+				if self.__voskcon:
+					LOGGER.debug("Closing Vosk server connection for session id: %s", self.__session_id, extra={
+						"session_id": self.__session_id,
+						"tag": "vosk",
+					})
+					with suppress(Exception):
+						await self.__voskcon.send('{"eof" : 1}')
+					with suppress(Exception):
+						await self.__voskcon.close()
+						self.__voskcon = None
 
 
 class Application:
