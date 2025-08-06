@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#
+# SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+# SPDX-FileCopyrightText: 2020 Alpha Cephei Inc. and contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 
 import asyncio
 import concurrent.futures
@@ -87,7 +91,7 @@ def process_chunk(rec: KaldiRecognizer, message: ws.Data) -> tuple[str, bool]:
 	return rec.PartialResult(), False
 
 
-async def recognize(websocket: ws.ServerConnection):
+async def recognize(websocket: ws.ServerConnection):  # noqa: C901
 	global pool
 
 	loop = asyncio.get_running_loop()

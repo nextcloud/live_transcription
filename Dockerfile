@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+# SPDX-FileCopyrightText: 2020 Alpha Cephei Inc. and contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 ARG RT_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04
 FROM ${RT_IMAGE}
 
