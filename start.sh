@@ -60,6 +60,9 @@ if [ -f /frpc.toml ] && [ -n "$HP_SHARED_KEY" ]; then
     frpc -c /frpc.toml &
 fi
 
+# Ensure the logs directory for supervisor exists
+mkdir -p /var/log/supervisor
+
 # Start the main application (launch cmd for ExApp is an argument for this script)
 echo "Starting application: $@"
 exec "$@"
