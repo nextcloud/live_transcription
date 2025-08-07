@@ -12,6 +12,8 @@
 	</description>
 	<version>1.0.0</version>
 	<licence>agpl</licence>
+	<author mail="kyteinsky@gmail.com" homepage="https://github.com/kyteinsky">Anupam Kumar</author>
+	<author mail="mklehr@gmx.net" homepage="https://github.com/marcelklehr">Marcel Klehr</author>
 	<namespace>LiveTranscription</namespace>
 	<category>ai</category>
 	<category>social</category>
@@ -59,7 +61,5 @@
 				<description>This limits concurrency of the transcription and by extension the max GPU/system memory usage. One worker processes one stream at a time.</description>
 			</variable>
 		</environment-variables>
-		<routes>
-		</routes>
 	</external-app>
 </info>
