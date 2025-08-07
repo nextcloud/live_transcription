@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.0.1 - 2025-08-07
+
+### Fixed
+- fix: info.xml fix and add info.xml linter workflow (#3) @kyteinsky
+
+
 ## 1.0.0 - 2025-08-06
 
 ### Added
