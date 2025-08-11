@@ -4,6 +4,8 @@
 -->
 # Live transcriptions in Nextcloud Talk
 
+[![REUSE status](https://api.reuse.software/badge/github.com/nextcloud/live_transcription)](https://api.reuse.software/info/github.com/nextcloud/live_transcription)
+
 ### Environment variables
 
 `example.env` contains all the environment variables needed to run the app. You can copy it to `.env` and change the values as needed.
