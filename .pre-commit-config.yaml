@@ -6,7 +6,7 @@ ci:
 exclude: '^ex_app/(img|js)/|.*\.phar'
 repos:
 -   repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
     -   id: check-yaml
     -   id: check-toml
@@ -23,12 +23,12 @@ repos:
         files: ex_app/lib/
 
 -   repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.11.8
+    rev: v0.12.8
     hooks:
     -   id: ruff
 
 -   repo: https://github.com/gitleaks/gitleaks
-    rev: v8.24.2
+    rev: v8.28.0
     hooks:
       - id: gitleaks
 
