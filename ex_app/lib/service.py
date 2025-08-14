@@ -212,7 +212,7 @@ class SpreedClient:
 
 			if message.get("type") == "error":
 				LOGGER.error(
-					"Error message received: %s\nDetails: %s", message.get("error", {}).get("message"),
+					"Signaling error message received: %s\nDetails: %s", message.get("error", {}).get("message"),
 					message.get("error", {}).get("details"), extra={
 						"room_token": self.room_token,
 						"msg_counter": msg_counter,
@@ -1191,7 +1191,8 @@ class Application:
 							"tag": "connection",
 						})
 						await self.spreed_clients[req.roomToken].close()
-						del self.spreed_clients[req.roomToken]
+						if req.roomToken in self.spreed_clients:
+							del self.spreed_clients[req.roomToken]
 						return
 					case ConnectResult.RETRY:
 						LOGGER.warning("Retrying connection to signaling server for room token: %s", req.roomToken,
@@ -1201,7 +1202,6 @@ class Application:
 								"tag": "connection",
 							},
 						)
-						await self.spreed_clients[req.roomToken].close()
 				tries -= 1
 				await asyncio.sleep(2)
 			except Exception as e:
