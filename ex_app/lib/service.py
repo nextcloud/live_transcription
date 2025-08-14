@@ -49,6 +49,9 @@ MAX_CONNECT_TRIES = 5  # maximum number of connection attempts
 MAX_AUDIO_FRAMES = 20  # maximum number of audio frames to collect before sending to Vosk
 HPB_SHUTDOWN_TIMEOUT = 30  # seconds to wait for the ws connectino to shut down gracefully
 CALL_LEAVE_TIMEOUT = 60  # seconds to wait before leaving the call if there are no targets
+# wait VOSK_CONNECT_TIMEOUT seconds for the Vosk server handshake to complete,
+# this includes the language load time in the Vosk server
+VOSK_CONNECT_TIMEOUT = 60
 LOGGER = logging.getLogger("lt.service")
 
 
@@ -939,7 +942,8 @@ class VoskTranscriber:
 				*({
 					"server_hostname": urlparse(self.__server_url).hostname,
 					"ssl": ssl_ctx,
-				} if ssl_ctx else {})
+				} if ssl_ctx else {}),
+				open_timeout=VOSK_CONNECT_TIMEOUT,
 			)
 			await self.__voskcon.send(
 				json.dumps({
