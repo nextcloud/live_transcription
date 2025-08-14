@@ -67,16 +67,27 @@ async def get_enabled():
 	return {"enabled": ENABLED.is_set()}
 
 
-@ROUTER.post("/call/set-language")
+@ROUTER.post("/call/set-language",
+	responses={
+		200: {"description": "Language set successfully for the call"},
+		400: {"description": "Invalid or unsupported language ID provided."},
+		404: {"description": "Spreed client not found for the provided room token."},
+		500: {"description": "Failed to set language for the call."}
+	})
 async def set_call_language(req: LanguageSetRequest):
 	try:
+		if not req.langId or req.langId not in LANGUAGE_MAP:
+			return JSONResponse(
+				status_code=400,
+				content={"error": "Invalid or unsupported language ID provided."}
+			)
 		await SERVICE.set_call_language(req)
 		return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
 	except VoskException as e:
 		LOGGER.exception("VoskException during set_call_language", exc_info=e)
 		return JSONResponse(status_code=e.retcode, content={"error": str(e)})
-	except SpreedClientException:
-		raise
+	except SpreedClientException as e:
+		return JSONResponse(status_code=404, content={"error": str(e)})
 	except Exception as e:
 		LOGGER.exception("Exception during set_call_language", exc_info=e)
 		return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})

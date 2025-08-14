@@ -996,7 +996,7 @@ class VoskTranscriber:
 			return
 
 		LOGGER.debug("Switching Vosk language from %s to %s",
-		LANGUAGE_MAP[self.__language].name, LANGUAGE_MAP[language].name,
+			LANGUAGE_MAP[self.__language].name, LANGUAGE_MAP[language].name,
 			extra={
 				"session_id": self.__session_id,
 				"tag": "vosk",
@@ -1039,7 +1039,7 @@ class VoskTranscriber:
 			raise VoskException("Error decoding JSON response from Vosk server after switching language") from e
 		ret = json_res.get("success", False)
 		if not ret:
-			raise VoskException("Vosk server did not confirm language switch successfully", 400)
+			raise VoskException("Vosk server did not confirm language switch successfully")
 		LOGGER.debug("Vosk language switched to %s successfully", LANGUAGE_MAP[language].name, extra={
 			"language": language,
 			"session_id": self.__session_id,
