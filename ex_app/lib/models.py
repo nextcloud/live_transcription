@@ -6,6 +6,8 @@
 from pydantic import BaseModel, Field
 
 MODELS_LIST = {
+	"ar": "vosk-model-ar-mgb2-0.4",
+	"ar_TN": "vosk-model-small-ar-tn-0.1-linto",
 	"br": "vosk-model-br-0.8",
 	"ca": "vosk-model-small-ca-0.4",
 	"cs": "vosk-model-small-cs-0.4-rhasspy",
@@ -44,6 +46,8 @@ class LanguageModel(BaseModel):
 
 
 LANGUAGE_MAP = {
+	"ar": LanguageModel(name="اَلْعَرَبِيَّةُ", metadata=LanguageMetadata(rtl=True)),
+	"ar_TN": LanguageModel(name="العربية (تونس)", metadata=LanguageMetadata(rtl=True)),
 	"br": LanguageModel(name="Breton"),
 	"ca": LanguageModel(name="Català"),
 	"cs": LanguageModel(name="Čeština"),
@@ -51,21 +55,11 @@ LANGUAGE_MAP = {
 	"en": LanguageModel(name="English"),
 	"eo": LanguageModel(name="Esperanto"),
 	"es": LanguageModel(name="Español"),
-	"fa": LanguageModel(
-		name="فارسی",
-		metadata=LanguageMetadata(
-			rtl=True,
-		),
-	),
+	"fa": LanguageModel(name="فارسی", metadata=LanguageMetadata(rtl=True)),
 	"fr": LanguageModel(name="Français"),
 	"hi": LanguageModel(name="हिंदी"),
 	"it": LanguageModel(name="Italiano"),
-	"ja": LanguageModel(
-		name="日本語",
-		metadata=LanguageMetadata(
-			separator="",
-		),
-	),
+	"ja": LanguageModel(name="日本語", metadata=LanguageMetadata(separator="")),
 	"kk": LanguageModel(name="қазақ"),
 	"ko": LanguageModel(name="한국인"),
 	"nl": LanguageModel(name="Nederlands"),
@@ -78,10 +72,5 @@ LANGUAGE_MAP = {
 	"uk": LanguageModel(name="українська"),
 	"uz": LanguageModel(name="o'zbek"),
 	"vi": LanguageModel(name="Tiếng Việt"),
-	"zh": LanguageModel(
-		name="中国",
-		metadata=LanguageMetadata(
-			separator="",
-		),
-	),
+	"zh": LanguageModel(name="中国", metadata=LanguageMetadata(separator="")),
 }

@@ -32,7 +32,7 @@ ENABLED = Event()
 MODELS_TO_FETCH = {
 	"Nextcloud-AI/vosk-models": {
 		"local_dir": persistent_storage(),
-		"revision": "22028d0a4474d7fc210cf7867da9eac6e3eb22e0",
+		"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
 	}
 }
 # todo: declarative settings for language override and model download
