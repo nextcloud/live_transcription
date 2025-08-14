@@ -36,6 +36,7 @@ MODELS_LIST = {
 
 class LanguageMetadata(BaseModel):
 	separator: str = Field(default=" ", description="Separator used in the language")
+	rtl: bool = Field(default=False, description="Indicates if the language is right-to-left (RTL)")
 
 class LanguageModel(BaseModel):
 	name: str = Field(..., description="Name of the language")
@@ -56,7 +57,12 @@ LANGUAGE_MAP = {
 	"en": LanguageModel(name="English"),
 	"eo": LanguageModel(name="Esperanto"),
 	"es": LanguageModel(name="Español"),
-	"fa": LanguageModel(name="فارسی"),
+	"fa": LanguageModel(
+		name="فارسی",
+		metadata=LanguageMetadata(
+			rtl=True,
+		),
+	),
 	"fr": LanguageModel(name="Français"),
 	"hi": LanguageModel(name="हिंदी"),
 	"it": LanguageModel(name="Italiano"),
