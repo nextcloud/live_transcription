@@ -165,6 +165,7 @@ class SpreedClient:
 		self.peer_connection_lock = threading.Lock()
 		self.targets: dict[str, Target] = {}
 		self.target_lock = threading.Lock()
+		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
 		self.transcript_queue: asyncio.Queue = asyncio.Queue()
 		self._transcript_sender: asyncio.Task | None = None
 		self.transcribers: dict[str, VoskTranscriber] = {}
@@ -530,18 +531,39 @@ class SpreedClient:
 		})
 		return message
 
-	def add_target(self, session_id: str):
+	def add_target(self, nc_session_id: str):
 		with self.target_lock:
+			if nc_session_id not in self.nc_sid_map:
+				LOGGER.error("HPB session ID corresponding to Nextcloud session ID '%s' not found",
+					nc_session_id,
+					extra={
+						"nc_session_id": nc_session_id,
+						"room_token": self.room_token,
+						"tag": "target",
+					},
+				)
+				raise SpreedClientException(
+					f"HPB session ID corresponding to Nextcloud session ID '{nc_session_id}' not found. "
+					"Please ensure the user is connected to the call before requesting transcription."
+				)
+
+			session_id = self.nc_sid_map[nc_session_id]
 			if session_id not in self.targets:
 				self.targets[session_id] = Target()
-				LOGGER.debug("Added target session id: %s", session_id, extra={
+				LOGGER.debug("Added target", extra={
 					"session_id": session_id,
+					"nc_session_id": nc_session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
 			else:
-				LOGGER.debug("Target '%s' already exists", session_id, extra={
+				LOGGER.debug("Target already exists", extra={
 					"session_id": session_id,
+					"nc_session_id": nc_session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -549,11 +571,29 @@ class SpreedClient:
 				self._deferred_close_task.cancel()
 				self._deferred_close_task = None
 
-	def remove_target(self, session_id: str):
+	def remove_target(self, nc_session_id: str):
 		with self.target_lock:
+			if nc_session_id not in self.nc_sid_map:
+				LOGGER.error("HPB session ID corresponding to Nextcloud session ID '%s' not found",
+					nc_session_id,
+					extra={
+						"nc_session_id": nc_session_id,
+						"room_token": self.room_token,
+						"tag": "target",
+					},
+				)
+				raise SpreedClientException(
+					f"HPB session ID corresponding to Nextcloud session ID '{nc_session_id}' not found. "
+					"Please ensure the user was connected to the call before cancelling transcription."
+				)
+
+			session_id = self.nc_sid_map[nc_session_id]
 			if session_id in self.targets:
 				LOGGER.debug("Removed target", extra={
 					"session_id": session_id,
+					"nc_session_id": nc_session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -565,6 +605,9 @@ class SpreedClient:
 			else:
 				LOGGER.debug("Target does not exist", extra={
 					"session_id": session_id,
+					"nc_session_id": nc_session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -665,8 +708,15 @@ class SpreedClient:
 								self.transcribers[user_desc["sessionId"]].shutdown()
 								del self.transcribers[user_desc["sessionId"]]
 						self.remove_target(user_desc["sessionId"])
+						with self.target_lock:
+							self.nc_sid_map.pop(user_desc["nextcloudSessionId"], None)
 						continue
 
+					# user connected, keep a map of Nextcloud session IDs to HPB session IDs
+					with self.target_lock:
+						self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
+
+					# user connected with audio
 					if (user_desc["inCall"] & CALL_FLAG.IN_CALL and user_desc["inCall"] & CALL_FLAG.WITH_AUDIO):
 						LOGGER.debug("User joined with audio", extra={
 							"user_desc": user_desc,
@@ -1157,31 +1207,35 @@ class Application:
 	async def transcript_req(self, req: TranscribeRequest) -> None:
 		with self.spreed_clients_lock:
 			if req.roomToken in self.spreed_clients:
-				LOGGER.info("Already in call for room token %s, adding target %s", req.roomToken, req.sessionId, extra={
-					"room_token": req.roomToken,
-					"session_id": req.sessionId,
-					"tag": "application",
-				})
+				LOGGER.info("Already in call for room token: %s, adding NC sessiond id: %s",
+					req.roomToken,
+					req.ncSessionId,
+					extra={
+						"room_token": req.roomToken,
+						"nc_session_id": req.ncSessionId,
+						"tag": "application",
+					},
+				)
 				if req.enable:
-					self.spreed_clients[req.roomToken].add_target(req.sessionId)
+					self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 				else:
-					self.spreed_clients[req.roomToken].remove_target(req.sessionId)
+					self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
 				return
 
 		if not req.enable:
 			LOGGER.info(
 				"Received request to turn off transcription for room token: %s, "
-				"session id: %s but no call is active. Ignoring request.",
-				req.roomToken, req.sessionId, extra={
+				"NC session id: %s but no call is active. Ignoring request.",
+				req.roomToken, req.ncSessionId, extra={
 					"room_token": req.roomToken,
-					"session_id": req.sessionId,
+					"nc_session_id": req.ncSessionId,
 					"tag": "application",
 				})
 			return
 
-		LOGGER.info("Joining call for room token: %s, session id: %s", req.roomToken, req.sessionId, extra={
+		LOGGER.info("Joining call for room token: %s, NC session id: %s", req.roomToken, req.ncSessionId, extra={
 			"room_token": req.roomToken,
-			"session_id": req.sessionId,
+			"nc_session_id": req.ncSessionId,
 			"tag": "application",
 		})
 		with self.spreed_clients_lock:
@@ -1191,7 +1245,6 @@ class Application:
 				req.langId,
 				self.__leave_call_cb,
 			)
-			self.spreed_clients[req.roomToken].add_target(req.sessionId)
 
 		tries = MAX_CONNECT_TRIES
 		last_exc = None
@@ -1205,6 +1258,7 @@ class Application:
 							"room_token": req.roomToken,
 							"tag": "connection",
 						})
+						self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 						return
 					case ConnectResult.FAILURE:
 						# do not retry

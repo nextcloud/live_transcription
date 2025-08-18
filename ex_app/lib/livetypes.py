@@ -26,7 +26,7 @@ class StreamEndedException(Exception):
 
 class TranscribeRequest(BaseModel):
 	roomToken: str
-	sessionId: str
+	ncSessionId: str # Nextcloud session ID, not the HPB session ID
 	enable: bool = True
 	langId: str = "en"
 
