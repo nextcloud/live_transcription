@@ -145,6 +145,7 @@ class AudioStream:
 # data carrier in the transcript_queue
 @dataclasses.dataclass
 class Transcript:
+	lang_id: str
 	message: str
 	speaker_session_id: str
 
@@ -396,11 +397,19 @@ class SpreedClient:
 			"bye": {}
 		})
 
-	async def send_transcript(self, message: str, spk_session_id: str):
+	async def send_transcript(self, transcript: Transcript):
 		with self.target_lock:
+			if not self.targets:
+				LOGGER.debug("No targets to send transcript to, skipping", extra={
+					"room_token": self.room_token,
+					"transcript": transcript,
+					"tag": "transcript",
+				})
+				return
 			sids = list(self.targets.keys())
-		for sid in sids:
-			await self.send_message({
+
+		send_tasks = [
+			self.send_message({
 				"type": "message",
 				"message": {
 					"recipient": {
@@ -408,12 +417,16 @@ class SpreedClient:
 						"sessionid": sid,
 					},
 					"data": {
-						"message": message,
+						"langId": transcript.lang_id,
+						"message": transcript.message,
+						"speakerSessionId": transcript.speaker_session_id,
 						"type": "transcript",
-						"speakerSessionId": spk_session_id,
 					}
 				}
 			})
+			for sid in sids
+		]
+		await asyncio.gather(*send_tasks)
 
 	# todo: add function to reconnect to hpb, full SpreedClient lifecycle
 	async def close(self, using_resume: bool = False):
@@ -876,7 +889,16 @@ class SpreedClient:
 		except Exception as e:
 			excs.append(e)
 		if len(excs) > 1:
-			raise VoskException("Failed to set language for multiple transcribers", retcode=500)
+			LOGGER.error("Failed to set language for multiple transcribers", extra={
+				"lang_id": lang_id,
+				"room_token": self.room_token,
+				"excs": excs,
+				"tag": "transcriber",
+			})
+			raise VoskException(
+				f"Failed to set language for multiple transcribers, first of which is: {excs[0]}",
+				retcode=500,
+			)
 		if len(excs) == 1:
 			raise VoskException(f"Failed to set language for one transcriber: {excs[0]}", retcode=500)
 		self.lang_id = lang_id
@@ -892,10 +914,7 @@ class SpreedClient:
 
 			try:
 				await asyncio.wait_for(
-					self.send_transcript(
-						message=transcript.message,
-						spk_session_id=transcript.speaker_session_id,
-					),
+					self.send_transcript(transcript),
 					timeout=10,
 				)
 			except TimeoutError:
@@ -1006,7 +1025,9 @@ class VoskTranscriber:
 				"tag": "vosk",
 			},
 		)
-		self.__language = language
+
+		# extend lock over the whole language switch process to avoid
+		# sending transcripts with the old language attached
 		async with self.__voskcon_lock:
 			await self.__voskcon.send(
 				json.dumps({
@@ -1020,35 +1041,36 @@ class VoskTranscriber:
 			while (not response or "success" not in response) and max_received_msgs > 0:
 				response = await self.__voskcon.recv()
 				max_received_msgs -= 1
-		if not response or "success" not in response:
-			LOGGER.error(
-				"Max received messages limit reached while waiting for Vosk server response. "
-				"Expected 'success' in response from Vosk server after switching language.",
-				response, extra={
-					"recv_response": response,
-					"session_id": self.__session_id,
-					"tag": "vosk",
-				},
-			)
-			raise VoskException("Vosk server did not respond in an expected fashion after switching language")
+			if not response or "success" not in response:
+				LOGGER.error(
+					"Max received messages limit reached while waiting for Vosk server response. "
+					"Expected 'success' in response from Vosk server after switching language.",
+					response, extra={
+						"recv_response": response,
+						"session_id": self.__session_id,
+						"tag": "vosk",
+					},
+				)
+				raise VoskException("Vosk server did not respond in an expected fashion after switching language")
 
-		LOGGER.debug("Response from Vosk server after switching language", extra={
-			"recv_response": response,
-			"session_id": self.__session_id,
-			"tag": "vosk",
-		})
-		try:
-			json_res = json.loads(response)
-		except json.JSONDecodeError as e:
-			raise VoskException("Error decoding JSON response from Vosk server after switching language") from e
-		ret = json_res.get("success", False)
-		if not ret:
-			raise VoskException("Vosk server did not confirm language switch successfully")
-		LOGGER.debug("Vosk language switched to %s successfully", LANGUAGE_MAP[language].name, extra={
-			"language": language,
-			"session_id": self.__session_id,
-			"tag": "vosk",
-		})
+			LOGGER.debug("Response from Vosk server after switching language", extra={
+				"recv_response": response,
+				"session_id": self.__session_id,
+				"tag": "vosk",
+			})
+			try:
+				json_res = json.loads(response)
+			except json.JSONDecodeError as e:
+				raise VoskException("Error decoding JSON response from Vosk server after switching language") from e
+			ret = json_res.get("success", False)
+			if not ret:
+				raise VoskException("Vosk server did not confirm language switch successfully")
+			LOGGER.debug("Vosk language switched to %s successfully", LANGUAGE_MAP[language].name, extra={
+				"language": language,
+				"session_id": self.__session_id,
+				"tag": "vosk",
+			})
+			self.__language = language
 
 
 	async def __run_audio_xfer(self, stream: AudioStream):  # noqa: C901
@@ -1092,6 +1114,7 @@ class VoskTranscriber:
 					continue
 
 				self.__transcript_queue.put_nowait(Transcript(
+					lang_id=self.__language,
 					message=message,
 					speaker_session_id=self.__session_id,
 				))
