@@ -166,6 +166,8 @@ class SpreedClient:
 		self.targets: dict[str, Target] = {}
 		self.target_lock = threading.Lock()
 		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
+		# the first target's Nextcloud session ID, used to defer the first target add until we join the call
+		self._nc_sid_wait_stash: dict[str, None] = {}
 		self.transcript_queue: asyncio.Queue = asyncio.Queue()
 		self._transcript_sender: asyncio.Task | None = None
 		self.transcribers: dict[str, VoskTranscriber] = {}
@@ -534,19 +536,17 @@ class SpreedClient:
 	def add_target(self, nc_session_id: str):
 		with self.target_lock:
 			if nc_session_id not in self.nc_sid_map:
-				LOGGER.error("HPB session ID corresponding to Nextcloud session ID '%s' not found",
-					nc_session_id,
+				# stash the NC session IDs until we receive the participants update
+				self._nc_sid_wait_stash[nc_session_id] = None
+				LOGGER.debug("HPB session ID corresponding to Nextcloud session ID '%s' not found, deferring add",
 					extra={
 						"nc_session_id": nc_session_id,
 						"room_token": self.room_token,
 						"tag": "target",
-					},
-				)
-				raise SpreedClientException(
-					f"HPB session ID corresponding to Nextcloud session ID '{nc_session_id}' not found. "
-					"Please ensure the user is connected to the call before requesting transcription."
-				)
+					})
+				return
 
+			self._nc_sid_wait_stash.pop(nc_session_id, None)
 			session_id = self.nc_sid_map[nc_session_id]
 			if session_id not in self.targets:
 				self.targets[session_id] = Target()
@@ -573,8 +573,9 @@ class SpreedClient:
 
 	def remove_target(self, nc_session_id: str):
 		with self.target_lock:
+			self._nc_sid_wait_stash.pop(nc_session_id, None)
 			if nc_session_id not in self.nc_sid_map:
-				LOGGER.error("HPB session ID corresponding to Nextcloud session ID '%s' not found",
+				LOGGER.debug("HPB session ID corresponding to Nextcloud session ID '%s' not found",
 					nc_session_id,
 					extra={
 						"nc_session_id": nc_session_id,
@@ -582,10 +583,7 @@ class SpreedClient:
 						"tag": "target",
 					},
 				)
-				raise SpreedClientException(
-					f"HPB session ID corresponding to Nextcloud session ID '{nc_session_id}' not found. "
-					"Please ensure the user was connected to the call before cancelling transcription."
-				)
+				return
 
 			session_id = self.nc_sid_map[nc_session_id]
 			if session_id in self.targets:
@@ -715,6 +713,18 @@ class SpreedClient:
 					# user connected, keep a map of Nextcloud session IDs to HPB session IDs
 					with self.target_lock:
 						self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
+
+					# if this is one of the deferred targets, add it to the targets
+					if (user_desc["nextcloudSessionId"] in self._nc_sid_wait_stash):
+						LOGGER.debug("Adding one of the deferred targets to the target dict", extra={
+							"nc_session_id": user_desc["nextcloudSessionId"],
+							"session_id": user_desc["sessionId"],
+							"room_token": self.room_token,
+							"tag": "target",
+						})
+						self.add_target(user_desc["nextcloudSessionId"])
+						with self.target_lock:
+							self._nc_sid_wait_stash.pop(user_desc["nextcloudSessionId"], None)
 
 					# user connected with audio
 					if (user_desc["inCall"] & CALL_FLAG.IN_CALL and user_desc["inCall"] & CALL_FLAG.WITH_AUDIO):
