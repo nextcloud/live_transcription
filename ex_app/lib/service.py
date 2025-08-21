@@ -1082,7 +1082,7 @@ class VoskTranscriber:
 			await self.__voskcon.send(
 				json.dumps({
 					"config": {
-						"language": self.__language,
+						"language": language,
 					}
 				})
 			)
