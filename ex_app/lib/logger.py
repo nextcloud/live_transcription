@@ -62,6 +62,7 @@ class JSONFormatter(logging.Formatter):
 			"timestamp": dt.datetime.fromtimestamp(
 				record.created, tz=dt.UTC,
 			).isoformat(),
+			"version": os.getenv("APP_VERSION", "unknown"),
 		}
 		if record.exc_info is not None:
 			always_fields["exc_info"] = self.formatException(record.exc_info)
@@ -80,8 +81,6 @@ class JSONFormatter(logging.Formatter):
 		for key, val in record.__dict__.items():
 			if key not in LOG_RECORD_BUILTIN_ATTRS:
 				message[key] = val
-
-# todo: add version info
 
 		return message
 
