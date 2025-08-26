@@ -4,6 +4,7 @@
 #
 
 import dataclasses
+from enum import IntEnum
 
 from pydantic import BaseModel
 
@@ -60,3 +61,17 @@ class Transcript:
 	lang_id: str
 	message: str
 	speaker_session_id: str
+
+
+class SigConnectResult(IntEnum):
+	SUCCESS = 0
+	FAILURE = 1  # do not retry
+	RETRY   = 2
+
+
+class CallFlag(IntEnum):
+	DISCONNECTED = 0
+	IN_CALL      = 1
+	WITH_AUDIO   = 2
+	WITH_VIDEO   = 4
+	WITH_PHONE   = 8
