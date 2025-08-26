@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
+import dataclasses
+
 from pydantic import BaseModel
 
 
@@ -50,3 +52,11 @@ class VoskException(Exception):
 	def __init__(self, message: str, retcode: int = 500):
 		super().__init__(message)
 		self.retcode = retcode
+
+
+# data carrier in the transcript_queue
+@dataclasses.dataclass
+class Transcript:
+	lang_id: str
+	message: str
+	speaker_session_id: str
