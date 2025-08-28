@@ -4,7 +4,7 @@
 
 APP_ID := live_transcription
 APP_NAME := Live Transcription
-APP_VERSION := 1.1.1
+APP_VERSION := 1.1.2
 JSON_INFO := "{\"id\":\"$(APP_ID)\",\"name\":\"$(APP_NAME)\",\"daemon_config_name\":\"manual_install\",\"version\":\"$(APP_VERSION)\",\"secret\":\"12345\",\"port\":23000}"
 
 

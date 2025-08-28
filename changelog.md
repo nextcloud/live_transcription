@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.1.2 - 2025-08-28
+
+### Fixed
+- use LT_DISABLE_INTERNAL_VOSK in vosk server (#21) @kyteinsky
+- override nc_py_api's NPA_NC_CERT based on SKIP_CERT_VERIFY (#23) @kyteinsky
+
+
 ## 1.1.1 - 2025-08-28
 
 ### Fixed
