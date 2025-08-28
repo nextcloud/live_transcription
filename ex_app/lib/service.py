@@ -8,12 +8,9 @@ import logging
 import threading
 
 from constants import HPB_SHUTDOWN_TIMEOUT, MAX_CONNECT_TRIES
-from dotenv import load_dotenv
 from livetypes import LanguageSetRequest, SigConnectResult, SpreedClientException, TranscribeRequest
 from spreed_client import SpreedClient
 from utils import get_hpb_settings
-
-load_dotenv()
 
 LOGGER = logging.getLogger("lt.service")
 

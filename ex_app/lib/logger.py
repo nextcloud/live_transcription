@@ -12,10 +12,7 @@ import logging.handlers
 import os
 from time import gmtime
 
-from dotenv import load_dotenv
 from ruamel.yaml import YAML
-
-load_dotenv()
 
 __all__ = ["JSONFormatter", "setup_logging"]
 
