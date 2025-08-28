@@ -194,11 +194,18 @@ class VoskTranscriber:
 					})
 					continue
 
-				message = json_msg.get("text", "")
+				if "partial" in json_msg:
+					message = json_msg["partial"]
+				elif "text" in json_msg:
+					message = json_msg["text"]
+				else:
+					message = ""
+
 				if message == "":
 					continue
 
 				self.__transcript_queue.put_nowait(Transcript(
+					final=("text" in json_msg),
 					lang_id=self.__language,
 					message=message,
 					speaker_session_id=self.__session_id,
