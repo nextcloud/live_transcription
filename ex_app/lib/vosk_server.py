@@ -167,6 +167,11 @@ async def start():
 	# logger.addHandler(logging.StreamHandler())
 	logging.basicConfig(level=logging.INFO)
 
+	disable_vosk = os.environ.get("LT_DISABLE_INTERNAL_VOSK", "false").lower()
+	if disable_vosk in ("true", "1"):
+		logging.info("LT_DISABLE_INTERNAL_VOSK is set, not starting internal Vosk server")
+		return
+
 	vosk_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
 	vosk_parsed_url = urlparse(vosk_url)
 	interface = vosk_parsed_url.hostname
