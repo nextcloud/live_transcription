@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.1.1 - 2025-08-28
+
+### Fixed
+- pin nc_py_api to 0.20.2 (#19) @kyteinsky
+
+
 ## 1.1.0 - 2025-08-28
 
 ### Added
