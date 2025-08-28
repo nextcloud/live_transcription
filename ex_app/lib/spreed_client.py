@@ -19,7 +19,6 @@ from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 from audio_stream import AudioStream
 from constants import CALL_LEAVE_TIMEOUT, MSG_RECEIVE_TIMEOUT
-from dotenv import load_dotenv
 from livetypes import CallFlag, HPBSettings, SigConnectResult, Target, Transcript, VoskException
 from models import LANGUAGE_MAP
 from nc_py_api import NextcloudApp
@@ -29,8 +28,6 @@ from websockets import ClientConnection
 from websockets import State as WsState
 from websockets import connect
 from websockets.exceptions import WebSocketException
-
-load_dotenv()
 
 LOGGER = logging.getLogger("lt.spreed_client")
 

@@ -95,7 +95,7 @@ def check_hpb_env_vars():
 def get_hpb_settings() -> HPBSettings:
 	check_hpb_env_vars()
 	try:
-		nc = NextcloudApp(npa_nc_cert=get_ssl_context(f"${os.environ['NEXTCLOUD_URL']}"))
+		nc = NextcloudApp()
 		settings = nc.ocs("GET", "/ocs/v2.php/apps/spreed/api/v3/signaling/settings")
 		hpb_settings = HPBSettings(**settings)
 		LOGGER.debug("HPB settings retrieved successfully", extra={
