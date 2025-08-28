@@ -2,7 +2,8 @@ aiortc
 av
 dotenv
 huggingface_hub
-nc_py_api
+# pin it to the version before niquests
+nc_py_api==0.20.2
 print_color
 pydantic
 ruamel.yaml
