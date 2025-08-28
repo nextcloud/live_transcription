@@ -10,7 +10,7 @@
 	<description>
 	<![CDATA[Provides live transcriptions in Nextcloud Talk calls. High-performance backend (HPB) is required for this app to work.]]>
 	</description>
-	<version>1.1.0</version>
+	<version>1.1.1</version>
 	<licence>agpl</licence>
 	<author mail="kyteinsky@gmail.com" homepage="https://github.com/kyteinsky">Anupam Kumar</author>
 	<author mail="mklehr@gmx.net" homepage="https://github.com/marcelklehr">Marcel Klehr</author>
@@ -27,7 +27,7 @@
 		<docker-install>
 			<registry>ghcr.io</registry>
 			<image>nextcloud-releases/live_transcription</image>
-			<image-tag>1.1.0</image-tag>
+			<image-tag>1.1.1</image-tag>
 		</docker-install>
 		<environment-variables>
 			<variable>
