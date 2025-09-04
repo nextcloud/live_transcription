@@ -58,6 +58,7 @@ class VoskException(Exception):
 # data carrier in the transcript_queue
 @dataclasses.dataclass
 class Transcript:
+	final: bool
 	lang_id: str
 	message: str
 	speaker_session_id: str

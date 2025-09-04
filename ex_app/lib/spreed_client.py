@@ -308,6 +308,7 @@ class SpreedClient:
 						"sessionid": sid,
 					},
 					"data": {
+						"final": transcript.final,
 						"langId": transcript.lang_id,
 						"message": transcript.message,
 						"speakerSessionId": transcript.speaker_session_id,
