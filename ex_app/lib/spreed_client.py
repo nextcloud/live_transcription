@@ -111,6 +111,23 @@ class SpreedClient:
 						"tag": "connection",
 					},
 				)
+
+				message_code = message.get("error", {}).get("code")
+				if message_code == "duplicate_session":
+					LOGGER.error("Duplicate session found, aborting connection", extra={
+						"room_token": self.room_token,
+						"msg_counter": msg_counter,
+						"tag": "connection",
+					})
+					return SigConnectResult.FAILURE
+				if message_code == "room_join_failed":
+					LOGGER.error("Room join failed, retrying...", extra={
+						"room_token": self.room_token,
+						"msg_counter": msg_counter,
+						"tag": "connection",
+					})
+					return SigConnectResult.RETRY
+
 				return SigConnectResult.FAILURE
 
 			if message.get("type") == "bye":
@@ -548,7 +565,12 @@ class SpreedClient:
 						"tag": "monitor",
 					},
 				)
-				# todo: only close if the error is not recoverable
+				if message.get("error", {}).get("code") == "processing_failed":
+					# this is most probably related to a transcript reception failure on HPB side
+					# we can try to continue
+					continue
+
+				# only close if the error is not recoverable
 				if not self._close_task:
 					self._close_task = asyncio.create_task(self.close())
 				return
