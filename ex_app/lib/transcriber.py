@@ -204,7 +204,9 @@ class VoskTranscriber:
 				else:
 					message = ""
 
-				if message == "":
+				# the english model outputs "the" periodically even in silent audio streams
+				# no similar case was seen with any other language model so VAD seems unnecessary?
+				if message == "" or message == "the":
 					continue
 
 				is_final = "text" in json_msg
