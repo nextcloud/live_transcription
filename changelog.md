@@ -11,6 +11,18 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.2.0 - 2025-09-11
+
+### Added
+- support sending partial transcript chunks (#22) @kyteinsky
+
+### Fixed
+- better HPB error message handling (#26) @kyteinsky
+- slow down transcript sent to 300ms (#26) @kyteinsky
+- better shutdown process (#26) @kyteinsky
+- drop the "the", it's cleaner (#26) @kyteinsky
+
+
 ## 1.1.2 - 2025-08-28
 
 ### Fixed
