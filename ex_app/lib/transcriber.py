@@ -10,12 +10,13 @@ import os
 import threading
 from contextlib import suppress
 from functools import partial
+from time import perf_counter
 from urllib.parse import urlparse
 
 from aiortc.mediastreams import MediaStreamError
 from audio_stream import AudioStream
 from av.audio.resampler import AudioResampler
-from constants import MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, VOSK_CONNECT_TIMEOUT
+from constants import MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL, VOSK_CONNECT_TIMEOUT
 from livetypes import StreamEndedException, Transcript, VoskException
 from models import LANGUAGE_MAP
 from utils import get_ssl_context
@@ -160,6 +161,8 @@ class VoskTranscriber:
 
 	async def __run_audio_xfer(self, stream: AudioStream):  # noqa: C901
 		frames = []
+		last_sent = 0.0
+
 		try:
 			while True:
 				fr = await stream.receive()
@@ -204,12 +207,18 @@ class VoskTranscriber:
 				if message == "":
 					continue
 
+				is_final = "text" in json_msg
+				if not is_final and (perf_counter() - last_sent) < MIN_TRANSCRIPT_SEND_INTERVAL:
+					# skip partial messages sent within MIN_TRANSCRIPT_SEND_INTERVAL (300ms)
+					continue
+
 				self.__transcript_queue.put_nowait(Transcript(
-					final=("text" in json_msg),
+					final=is_final,
 					lang_id=self.__language,
 					message=message,
 					speaker_session_id=self.__session_id,
 				))
+				last_sent = perf_counter()
 		except (StreamEndedException, MediaStreamError):
 			LOGGER.debug("Audio stream ended for session id: %s", self.__session_id, extra={
 				"session_id": self.__session_id,
