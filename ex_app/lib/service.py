@@ -24,16 +24,16 @@ class Application:
 	async def transcript_req(self, req: TranscribeRequest) -> None:
 		with self.spreed_clients_lock:
 			if req.roomToken in self.spreed_clients:
-				LOGGER.info("Already in call for room token: %s, adding NC sessiond id: %s",
-					req.roomToken,
-					req.ncSessionId,
-					extra={
-						"room_token": req.roomToken,
-						"nc_session_id": req.ncSessionId,
-						"tag": "application",
-					},
-				)
 				if req.enable:
+					LOGGER.info("Already in call for room token: %s, adding NC sessiond id: %s",
+						req.roomToken,
+						req.ncSessionId,
+						extra={
+							"room_token": req.roomToken,
+							"nc_session_id": req.ncSessionId,
+							"tag": "application",
+						},
+					)
 					self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 				else:
 					self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
