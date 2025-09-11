@@ -338,7 +338,7 @@ class SpreedClient:
 		await asyncio.gather(*send_tasks)
 
 	# todo: add function to reconnect to hpb, full SpreedClient lifecycle
-	async def close(self, using_resume: bool = False):
+	async def close(self, using_resume: bool = False):  # noqa: C901
 		if self.defunct.is_set():
 			LOGGER.debug("SpreedClient is already defunct, skipping close", extra={
 				"room_token": self.room_token,
@@ -346,6 +346,15 @@ class SpreedClient:
 				"tag": "client",
 			})
 			return
+
+		if self._deferred_close_task and not self._deferred_close_task.done():
+			LOGGER.debug("Cancelling deferred close task", extra={
+				"room_token": self.room_token,
+				"using_resume": using_resume,
+				"tag": "deferred_close",
+			})
+			self._deferred_close_task.cancel()
+			self._deferred_close_task = None
 
 		app_closing = self._monitor.cancelled() if self._monitor else False
 
@@ -364,6 +373,17 @@ class SpreedClient:
 			await self.send_bye()
 
 		with suppress(Exception):
+			LOGGER.debug("Shutting down all transcribers", extra={
+				"room_token": self.room_token,
+				"using_resume": using_resume,
+				"tag": "transcriber",
+			})
+			for transcriber in self.transcribers.values():
+				transcriber.shutdown()
+			with self.transcriber_lock:
+				self.transcribers.clear()
+
+		with suppress(Exception):
 			if not using_resume:
 				for pc in self.peer_connections.values():
 					if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
@@ -379,17 +399,6 @@ class SpreedClient:
 					self.peer_connections.clear()
 				self.resumeid = None
 				self.sessionid = None
-
-		with suppress(Exception):
-			LOGGER.debug("Shutting down all transcribers", extra={
-				"room_token": self.room_token,
-				"using_resume": using_resume,
-				"tag": "transcriber",
-			})
-			for transcriber in self.transcribers.values():
-				transcriber.shutdown()
-			with self.transcriber_lock:
-				self.transcribers.clear()
 
 		with suppress(Exception):
 			if self._transcript_sender and not self._transcript_sender.done():
