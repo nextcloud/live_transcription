@@ -1,5 +1,10 @@
 # SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
+
+[project]
+name = "ex_app"
+version = "1.2.0"
+
 [tool.ruff]
 line-length = 120
 target-version = "py312"

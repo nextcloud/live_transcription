@@ -14,9 +14,10 @@ from urllib.parse import urlparse
 
 import websockets as ws
 from dotenv import load_dotenv
-from models import MODELS_LIST
 from nc_py_api.ex_app import persistent_storage
 from vosk import KaldiRecognizer, Model
+
+from .models import MODELS_LIST
 
 load_dotenv()
 

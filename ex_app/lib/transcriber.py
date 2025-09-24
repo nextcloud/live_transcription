@@ -14,13 +14,14 @@ from time import perf_counter
 from urllib.parse import urlparse
 
 from aiortc.mediastreams import MediaStreamError
-from audio_stream import AudioStream
 from av.audio.resampler import AudioResampler
-from constants import MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL, VOSK_CONNECT_TIMEOUT
-from livetypes import StreamEndedException, Transcript, VoskException
-from models import LANGUAGE_MAP
-from utils import get_ssl_context
 from websockets import ClientConnection, connect
+
+from .audio_stream import AudioStream
+from .constants import MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL, VOSK_CONNECT_TIMEOUT
+from .livetypes import StreamEndedException, Transcript, VoskException
+from .models import LANGUAGE_MAP
+from .utils import get_ssl_context
 
 LOGGER = logging.getLogger("lt.transcriber")
 

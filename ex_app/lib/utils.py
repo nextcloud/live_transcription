@@ -10,8 +10,9 @@ import os
 import ssl
 from urllib.parse import urlparse
 
-from livetypes import HPBSettings
 from nc_py_api import NextcloudApp
+
+from .livetypes import HPBSettings
 
 LOGGER = logging.getLogger("lt.utils")
 

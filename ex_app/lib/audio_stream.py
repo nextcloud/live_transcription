@@ -7,7 +7,8 @@ import logging
 
 from aiortc import AudioStreamTrack
 from av.audio.frame import AudioFrame
-from livetypes import StreamEndedException
+
+from .livetypes import StreamEndedException
 
 LOGGER = logging.getLogger("lt.audio_stream")
 

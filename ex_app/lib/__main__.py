@@ -10,10 +10,10 @@ from pathlib import Path
 from threading import Event
 
 # isort: off
-from livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest, VoskException
-
 from dotenv import load_dotenv
 load_dotenv()
+
+from .livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest, VoskException
 
 # skip certificate verification for all nc_py_api connections if env var is set
 __skip_cert_verify = os.environ.get("SKIP_CERT_VERIFY", "false").lower()
@@ -25,11 +25,12 @@ import uvicorn
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
-from logger import get_logging_config, setup_logging
-from models import LANGUAGE_MAP, LanguageModel
 from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers, setup_nextcloud_logging
-from service import Application
+
+from .logger import get_logging_config, setup_logging
+from .models import LANGUAGE_MAP, LanguageModel
+from .service import Application
 
 LOGGER_CONFIG_NAME = "../../logger_config.yaml"
 LOGGER = logging.getLogger("lt")
@@ -139,4 +140,4 @@ if __name__ == "__main__":
 	uv_log_config["loggers"]["uvicorn"]["handlers"].append("file_json")
 	uv_log_config["loggers"]["uvicorn.access"]["handlers"].append("file_json")
 
-	run_app("main:APP", log_level="info")
+	run_app("__main__:APP", log_level="info", log_config=uv_log_config)

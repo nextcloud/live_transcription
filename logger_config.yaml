@@ -13,7 +13,7 @@ formatters:
     datefmt: '%Y-%m-%dT%H:%M:%S%z'
 
   json:
-    (): logger.JSONFormatter
+    (): ex_app.lib.logger.JSONFormatter
     fmt_keys:
       timestamp: timestamp
       level: levelname

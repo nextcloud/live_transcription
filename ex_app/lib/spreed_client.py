@@ -17,17 +17,18 @@ from urllib.parse import urlparse
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
-from audio_stream import AudioStream
-from constants import CALL_LEAVE_TIMEOUT, MSG_RECEIVE_TIMEOUT
-from livetypes import CallFlag, HPBSettings, SigConnectResult, Target, Transcript, VoskException
-from models import LANGUAGE_MAP
 from nc_py_api import NextcloudApp
-from transcriber import VoskTranscriber
-from utils import get_ssl_context, hmac_sha256
 from websockets import ClientConnection
 from websockets import State as WsState
 from websockets import connect
 from websockets.exceptions import WebSocketException
+
+from .audio_stream import AudioStream
+from .constants import CALL_LEAVE_TIMEOUT, MSG_RECEIVE_TIMEOUT
+from .livetypes import CallFlag, HPBSettings, SigConnectResult, Target, Transcript, VoskException
+from .models import LANGUAGE_MAP
+from .transcriber import VoskTranscriber
+from .utils import get_ssl_context, hmac_sha256
 
 LOGGER = logging.getLogger("lt.spreed_client")
 
