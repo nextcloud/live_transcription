@@ -806,18 +806,19 @@ class SpreedClient:
 
 					try:
 						await self.transcribers[spkr_sid].connect()
+						await self.transcribers[spkr_sid].start(stream=stream)
 					except Exception:
-						LOGGER.exception("Error connecting to Vosk server. Cannot continue further.", extra={
-							"server_url": os.getenv("LT_VOSK_SERVER_URL", "ws://localhost:2702"),
-							"session_id": spkr_sid,
-							"room_token": self.room_token,
-							"tag": "vosk",
-						})
+						LOGGER.exception("Error in connection and start of the Vosk server. Cannot continue further.",
+							extra={
+								"server_url": os.getenv("LT_VOSK_SERVER_URL", "ws://localhost:2702"),
+								"session_id": spkr_sid,
+								"room_token": self.room_token,
+								"tag": "vosk",
+							})
 						if not self._close_task:
 							self._close_task = asyncio.create_task(self.close())
-							return
+						return
 
-					await self.transcribers[spkr_sid].start(stream=stream)
 					LOGGER.debug("Started transcriber for %s in %s", spkr_sid, LANGUAGE_MAP.get(self.lang_id).name,
 						extra={
 							"session_id": spkr_sid,
