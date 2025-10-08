@@ -42,7 +42,7 @@ def get_ssl_context(server_addr: str) -> ssl.SSLContext | None:
 			"SKIP_CERT_VERIFY": cert_verify,
 			"tag": "connection",
 		})
-		ssl_ctx = ssl.SSLContext()
+		ssl_ctx = ssl.SSLContext(protocol=ssl.PROTOCOL_TLS_CLIENT)
 		ssl_ctx.check_hostname = False
 		ssl_ctx.verify_mode = ssl.CERT_NONE
 		return ssl_ctx

@@ -1,6 +1,8 @@
 -r requirements.txt
 
-pre-commit
 black
-ruff
 mypy
+pre-commit
+pytest
+pytest-asyncio
+ruff
