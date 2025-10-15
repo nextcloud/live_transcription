@@ -7,7 +7,13 @@ import asyncio
 import logging
 
 from constants import HPB_SHUTDOWN_TIMEOUT, MAX_CONNECT_TRIES
-from livetypes import LanguageSetRequest, SigConnectResult, SpreedClientException, TranscribeRequest
+from livetypes import (
+	RoomLanguageSetRequest,
+	SigConnectResult,
+	SpreedClientException,
+	TargetLanguageSetRequest,
+	TranscribeRequest,
+)
 from spreed_client import SpreedClient
 from utils import get_hpb_settings
 
@@ -76,6 +82,8 @@ class Application:
 					await self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 				else:
 					await self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
+					# todo: await?
+					self.spreed_clients[req.roomToken].remove_translation(req.ncSessionId)
 				return
 
 		if not req.enable:
@@ -161,7 +169,8 @@ class Application:
 			f"Failed to connect to signaling server for room token {req.roomToken} after {MAX_CONNECT_TRIES} attempts"
 		) from last_exc
 
-	async def set_call_language(self, req: LanguageSetRequest) -> None:
+	async def set_call_language(self, req: RoomLanguageSetRequest) -> None:
+		# todo: re-check all locks if they're asyncio
 		async with self.spreed_clients_lock:
 			if req.roomToken not in self.spreed_clients:
 				raise SpreedClientException(
@@ -170,6 +179,16 @@ class Application:
 
 			spreed_client = self.spreed_clients[req.roomToken]
 			await spreed_client.set_language(req.langId)
+
+	async def set_target_language(self, req: TargetLanguageSetRequest) -> None:
+		if req.roomToken not in self.spreed_clients:
+			raise SpreedClientException(
+				f"No SpreedClient for room token {req.roomToken}, cannot set target language"
+			)
+
+		with self.spreed_clients_lock:
+			spreed_client = self.spreed_clients[req.roomToken]
+			await spreed_client.set_target_language(req.ncSessionId, req.langId)
 
 	async def leave_call(self, room_token: str):
 		"""Leave the call for the given room token. Called from an API endpoint."""

@@ -10,8 +10,13 @@ from pathlib import Path
 from threading import Event
 
 # isort: off
-from livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest, VoskException
-
+from livetypes import (
+	RoomLanguageSetRequest,
+	SpreedClientException,
+	TargetLanguageSetRequest,
+	TranscribeRequest,
+	VoskException,
+)
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -80,7 +85,7 @@ async def get_enabled():
 		404: {"description": "Spreed client not found for the provided room token."},
 		500: {"description": "Failed to set language for the call."}
 	})
-async def set_call_language(req: LanguageSetRequest):
+async def set_call_language(req: RoomLanguageSetRequest):
 	try:
 		if not req.langId or req.langId not in LANGUAGE_MAP:
 			return JSONResponse(
@@ -97,6 +102,39 @@ async def set_call_language(req: LanguageSetRequest):
 	except Exception as e:
 		LOGGER.exception("Exception during set_call_language", exc_info=e)
 		return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
+
+
+# for translation
+@ROUTER.post("/call/set-target-language",
+	responses={
+		200: {"description": "Target translation language set successfully for the participant."},
+		400: {"description": "Invalid or unsupported language ID provided."},
+		404: {"description": "Spreed client not found for the provided room token."},
+		500: {"description": "Failed to set the target translation language for the participant."}
+	})
+async def set_target_language(req: TargetLanguageSetRequest):
+	try:
+		if not req.langId or req.langId not in LANGUAGE_MAP:
+			return JSONResponse(
+				status_code=400,
+				content={"error": "Invalid or unsupported language ID provided."}
+			)
+		await SERVICE.set_target_language(req)
+		return JSONResponse(
+			status_code=200,
+			content={"message": "Target translation language set successfully for the participant."}
+		)
+	except VoskException as e:
+		LOGGER.exception("VoskException during set_target_language", exc_info=e)
+		return JSONResponse(status_code=e.retcode, content={"error": str(e)})
+	except SpreedClientException as e:
+		return JSONResponse(status_code=404, content={"error": str(e)})
+	except Exception as e:
+		LOGGER.exception("Exception during set_target_language", exc_info=e)
+		return JSONResponse(
+			status_code=500,
+			content={"error": "Failed to set the target translation language for the participant."}
+		)
 
 
 @ROUTER.post("/call/leave")

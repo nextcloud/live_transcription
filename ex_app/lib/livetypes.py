@@ -32,10 +32,18 @@ class TranscribeRequest(BaseModel):
 	ncSessionId: str # Nextcloud session ID, not the HPB session ID
 	enable: bool = True
 	langId: str = "en"
+	# the user's language, when set, translate the transcript to this language
+	translationTargetLangId: str | None = None
 
 
-class LanguageSetRequest(BaseModel):
+class RoomLanguageSetRequest(BaseModel):
 	roomToken: str
+	langId: str
+
+
+class TargetLanguageSetRequest(BaseModel):
+	roomToken: str
+	ncSessionId: str # Nextcloud session ID, not the HPB session ID
 	langId: str
 
 
@@ -68,6 +76,16 @@ class Transcript:
 	speaker_session_id: str
 
 
+# data carrier in the translate_queue_input & output
+@dataclasses.dataclass
+class TranslateInputOutput:
+	origin_language: str
+	target_language: str
+	message: str  # can be either input or output
+	speaker_session_id: str
+	target_nc_session_ids: set[str]
+
+
 class SigConnectResult(IntEnum):
 	SUCCESS = 0
 	FAILURE = 1  # do not retry
@@ -86,3 +104,7 @@ class CallFlag(IntEnum):
 	WITH_AUDIO   = 2
 	WITH_VIDEO   = 4
 	WITH_PHONE   = 8
+
+
+class TranslateException(Exception):
+	...
