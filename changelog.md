@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.2.1 - 2025-11-05
+
+### Fixed
+- return gracefully on vosk connection error (#29) @kyteinsky
+
+### Changed
+- bump max NC version to 33
+
+
 ## 1.2.0 - 2025-09-11
 
 ### Added
