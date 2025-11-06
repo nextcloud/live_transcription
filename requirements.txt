@@ -6,6 +6,7 @@ huggingface_hub
 nc_py_api==0.20.2
 print_color
 pydantic
+requests
 ruamel.yaml
 srt
 # no pypi release since a long time
