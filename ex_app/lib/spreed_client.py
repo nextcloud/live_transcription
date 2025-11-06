@@ -23,7 +23,7 @@ from livetypes import CallFlag, HPBSettings, SigConnectResult, Target, Transcrip
 from models import LANGUAGE_MAP
 from nc_py_api import NextcloudApp
 from transcriber import VoskTranscriber
-from utils import get_ssl_context, hmac_sha256
+from utils import get_ssl_context, hmac_sha256, sanitize_websocket_url
 from websockets import ClientConnection
 from websockets import State as WsState
 from websockets import connect
@@ -68,7 +68,7 @@ class SpreedClient:
 		self.sessionid = None
 
 		nc = NextcloudApp()
-		self._websopcket_url = os.environ["LT_HPB_URL"]
+		self._websocket_url = sanitize_websocket_url(os.environ["LT_HPB_URL"])
 		self._backendURL = nc.app_cfg.endpoint + "/ocs/v2.php/apps/spreed/api/v3/signaling/backend"
 		self.secret = os.environ["LT_INTERNAL_SECRET"]
 
@@ -79,12 +79,12 @@ class SpreedClient:
 
 
 	async def connect(self) -> SigConnectResult:
-		websopcket_host = urlparse(self._websopcket_url).hostname
-		ssl_ctx = get_ssl_context(self._websopcket_url)
+		websocket_host = urlparse(self._websocket_url).hostname
+		ssl_ctx = get_ssl_context(self._websocket_url)
 		self._server = await connect(
-			self._websopcket_url,
+			self._websocket_url,
 			**({
-				"server_hostname": websopcket_host,
+				"server_hostname": websocket_host,
 				"ssl": ssl_ctx,  # type: ignore[arg-type]
 			} if ssl_ctx else {}),
 		)
