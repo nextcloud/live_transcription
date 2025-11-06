@@ -6,6 +6,17 @@
 
 [![REUSE status](https://api.reuse.software/badge/github.com/nextcloud/live_transcription)](https://api.reuse.software/info/github.com/nextcloud/live_transcription)
 
+Provides live transcriptions in Nextcloud Talk calls. High-performance backend (HPB) is required for this app to work.
+
+Setup instructions:
+1. Make sure the [Nextcloud Talk app](https://apps.nextcloud.com/apps/spreed) is installed.
+2. Make sure the High-Performance Backend is installed and configured in Nextcloud Talk settings. See the [Nextcloud Talk install manual](https://nextcloud-talk.readthedocs.io/en/latest/quick-install/) for more information.
+3. Setup a [Deploy Daemon](https://docs.nextcloud.com/server/latest/admin_manual/exapps_management/AppAPIAndExternalApps.html) in AppAPI Admin settings.
+4. Install the **live_transcription** app via the "Apps" page in Nextcloud administration settings.
+
+> [!IMPORTANT]
+> Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are required to be set in "Deploy Options" near the "Deploy and Enable" button before the install.
+
 ### Environment variables
 
 `example.env` contains all the environment variables needed to run the app. You can copy it to `.env` and change the values as needed.

@@ -8,7 +8,16 @@
 	<name>Live Transcription in Talk</name>
 	<summary>Provides live transcriptions in Nextcloud Talk calls.</summary>
 	<description>
-	<![CDATA[Provides live transcriptions in Nextcloud Talk calls. High-performance backend (HPB) is required for this app to work.]]>
+	<![CDATA[Provides live transcriptions in Nextcloud Talk calls. High-performance backend (HPB) is required for this app to work.
+
+Setup instructions:
+1. Make sure the [Nextcloud Talk app](https://apps.nextcloud.com/apps/spreed) is installed.
+2. Make sure the High-Performance Backend is installed and configured in Nextcloud Talk settings. See the [Nextcloud Talk install manual](https://nextcloud-talk.readthedocs.io/en/latest/quick-install/) for more information.
+3. Setup a [Deploy Daemon](https://docs.nextcloud.com/server/latest/admin_manual/exapps_management/AppAPIAndExternalApps.html) in AppAPI Admin settings.
+4. Install the **live_transcription** app via the "Apps" page in Nextcloud administration settings.
+
+IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are required to be set in "Deploy Options" near the "Deploy and Enable" button before the install.
+]]>
 	</description>
 	<version>1.2.1</version>
 	<licence>agpl</licence>
@@ -33,7 +42,7 @@
 			<variable>
 				<name>LT_HPB_URL</name>
 				<display-name>High-performance backend URL</display-name>
-				<description>URL of the high-performance backend, same as the URL in the admin settings of Talk. This should support websockets.</description>
+				<description>URL of the high-performance backend, same as the URL in the admin settings of Talk. It ends in "/spreed" usually and looks something like "wss://cloud.example.com/standalone-signaling/spreed".</description>
 			</variable>
 			<variable>
 				<name>LT_INTERNAL_SECRET</name>
