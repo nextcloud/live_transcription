@@ -11,6 +11,16 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.2.2 - 2025-11-07
+
+### Fixed
+- pip's behaviour change with installing vosk's deps (#37) @kyteinsky
+
+### Changed
+- allow https url scheme and add /spreed in hpb url (#36) @kyteinsky
+- improve install docs and LT_HPB_URL description (#35) @kyteinsky
+
+
 ## 1.2.1 - 2025-11-05
 
 ### Fixed

@@ -19,7 +19,7 @@ Setup instructions:
 IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are required to be set in "Deploy Options" near the "Deploy and Enable" button before the install.
 ]]>
 	</description>
-	<version>1.2.1</version>
+	<version>1.2.2</version>
 	<licence>agpl</licence>
 	<author mail="kyteinsky@gmail.com" homepage="https://github.com/kyteinsky">Anupam Kumar</author>
 	<author mail="mklehr@gmx.net" homepage="https://github.com/marcelklehr">Marcel Klehr</author>
@@ -36,7 +36,7 @@ IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are requi
 		<docker-install>
 			<registry>ghcr.io</registry>
 			<image>nextcloud-releases/live_transcription</image>
-			<image-tag>1.2.1</image-tag>
+			<image-tag>1.2.2</image-tag>
 		</docker-install>
 		<environment-variables>
 			<variable>
