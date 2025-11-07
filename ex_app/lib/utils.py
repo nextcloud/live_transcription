@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import ssl
 from urllib.parse import urlparse
 
@@ -107,3 +108,11 @@ def get_hpb_settings() -> HPBSettings:
 		return hpb_settings
 	except Exception as e:
 		raise Exception("Error getting HPB settings") from e
+
+
+def sanitize_websocket_url(ws_url: str) -> str:
+	ws_url = re.sub(r"^http://", "ws://", ws_url)
+	ws_url = re.sub(r"^https://", "wss://", ws_url)
+	if not ws_url.removesuffix("/").endswith("/spreed"):
+		ws_url = ws_url.removesuffix("/") + "/spreed"
+	return ws_url
