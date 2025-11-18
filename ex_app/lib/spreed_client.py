@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from secrets import token_urlsafe
 from urllib.parse import urlparse
@@ -44,22 +44,22 @@ class SpreedClient:
 		room_token: str,
 		hpb_settings: HPBSettings,
 		lang_id: str,
-		leave_call_cb: Callable[[str], None],  # room_token
+		leave_call_cb: Callable[[str], Awaitable[None]],  # room_token
 	) -> None:
 		self.id = 0
 		self._server: ClientConnection | None = None
 		self._monitor: asyncio.Task | None = None
 		self.peer_connections: dict[str, PeerConnection] = {}
-		self.peer_connection_lock = threading.Lock()
+		self.peer_connection_lock = asyncio.Lock()
 		self.targets: dict[str, Target] = {}
-		self.target_lock = threading.Lock()
+		self.target_lock = asyncio.Lock()
 		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
 		# the first target's Nextcloud session ID, used to defer the first target add until we join the call
 		self._nc_sid_wait_stash: dict[str, None] = {}
 		self.transcript_queue: asyncio.Queue = asyncio.Queue()
 		self._transcript_sender: asyncio.Task | None = None
 		self.transcribers: dict[str, VoskTranscriber] = {}
-		self.transcriber_lock = threading.Lock()
+		self.transcriber_lock = asyncio.Lock()
 		self.defunct = threading.Event()
 		self._close_task: asyncio.Task | None = None
 		self._deferred_close_task: asyncio.Task | None = None
@@ -306,7 +306,7 @@ class SpreedClient:
 		})
 
 	async def send_transcript(self, transcript: Transcript):
-		with self.target_lock:
+		async with self.target_lock:
 			if not self.targets:
 				LOGGER.debug("No targets to send transcript to, skipping", extra={
 					"room_token": self.room_token,
@@ -380,7 +380,7 @@ class SpreedClient:
 			})
 			for transcriber in self.transcribers.values():
 				transcriber.shutdown()
-			with self.transcriber_lock:
+			async with self.transcriber_lock:
 				self.transcribers.clear()
 
 		with suppress(Exception):
@@ -395,7 +395,7 @@ class SpreedClient:
 						})
 						with suppress(Exception):
 							await pc.pc.close()
-				with self.peer_connection_lock:
+				async with self.peer_connection_lock:
 					self.peer_connections.clear()
 				self.resumeid = None
 				self.sessionid = None
@@ -424,7 +424,7 @@ class SpreedClient:
 		if not using_resume:
 			self.defunct.set()
 			if not app_closing:
-				self.leave_call_cb(self.room_token)
+				await self.leave_call_cb(self.room_token)
 
 	async def receive(self, timeout: int = 0) -> dict | None:
 		if not self._server:
@@ -448,8 +448,8 @@ class SpreedClient:
 		})
 		return message
 
-	def add_target(self, nc_session_id: str):
-		with self.target_lock:
+	async def add_target(self, nc_session_id: str):
+		async with self.target_lock:
 			if nc_session_id not in self.nc_sid_map:
 				# stash the NC session IDs until we receive the participants update
 				self._nc_sid_wait_stash[nc_session_id] = None
@@ -486,8 +486,8 @@ class SpreedClient:
 				self._deferred_close_task.cancel()
 				self._deferred_close_task = None
 
-	def remove_target(self, nc_session_id: str):
-		with self.target_lock:
+	async def remove_target(self, nc_session_id: str):
+		async with self.target_lock:
 			self._nc_sid_wait_stash.pop(nc_session_id, None)
 			if nc_session_id not in self.nc_sid_map:
 				LOGGER.debug("HPB session ID corresponding to Nextcloud session ID '%s' not found",
@@ -538,7 +538,7 @@ class SpreedClient:
 			try:
 				message = await self.receive()
 			except WebSocketException as e:
-				LOGGER.exception("HPB websocket error", exc_info=e, extra={
+				LOGGER.exception("HPB websocket error, reconnecting...", exc_info=e, extra={
 					"room_token": self.room_token,
 					"tag": "monitor",
 				})
@@ -621,17 +621,17 @@ class SpreedClient:
 						})
 						# the transcription should automatically stop when the audio track is closed
 						# cleaning it up in this class
-						if user_desc["sessionId"] in self.transcribers:
-							with self.transcriber_lock:
+						async with self.transcriber_lock:
+							if user_desc["sessionId"] in self.transcribers:
 								self.transcribers[user_desc["sessionId"]].shutdown()
 								del self.transcribers[user_desc["sessionId"]]
-						self.remove_target(user_desc["sessionId"])
-						with self.target_lock:
+						await self.remove_target(user_desc["sessionId"])
+						async with self.target_lock:
 							self.nc_sid_map.pop(user_desc["nextcloudSessionId"], None)
 						continue
 
 					# user connected, keep a map of Nextcloud session IDs to HPB session IDs
-					with self.target_lock:
+					async with self.target_lock:
 						self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
 
 					# if this is one of the deferred targets, add it to the targets
@@ -642,8 +642,8 @@ class SpreedClient:
 							"room_token": self.room_token,
 							"tag": "target",
 						})
-						self.add_target(user_desc["nextcloudSessionId"])
-						with self.target_lock:
+						await self.add_target(user_desc["nextcloudSessionId"])
+						async with self.target_lock:
 							self._nc_sid_wait_stash.pop(user_desc["nextcloudSessionId"], None)
 
 					# user connected with audio
@@ -699,7 +699,7 @@ class SpreedClient:
 				candidate = candidate_from_sdp(message["message"]["data"]["payload"]["candidate"]["candidate"])
 				candidate.sdpMid = message["message"]["data"]["payload"]["candidate"]["sdpMid"]
 				candidate.sdpMLineIndex = message["message"]["data"]["payload"]["candidate"]["sdpMLineIndex"]
-				with self.peer_connection_lock:
+				async with self.peer_connection_lock:
 					if message["message"]["sender"]["sessionid"] not in self.peer_connections:
 						continue
 					await self.peer_connections[message["message"]["sender"]["sessionid"]].pc.addIceCandidate(candidate)
@@ -730,7 +730,7 @@ class SpreedClient:
 			self._deferred_close_task = None
 			return
 
-		with self.target_lock:
+		async with self.target_lock:
 			len_targets = len(self.targets)
 		if len_targets == 0:
 			LOGGER.debug("No transcript receivers for %s secs, leaving the call", CALL_LEAVE_TIMEOUT, extra={
@@ -744,7 +744,7 @@ class SpreedClient:
 	async def handle_offer(self, message):  # noqa: C901
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
-		with self.peer_connection_lock:
+		async with self.peer_connection_lock:
 			if spkr_sid in self.peer_connections:
 				LOGGER.debug("Peer connection for %s already exists, skipping offer handling", spkr_sid, extra={
 					"room_token": self.room_token,
@@ -787,7 +787,7 @@ class SpreedClient:
 					"room_token": self.room_token,
 					"tag": "peer_connection",
 				})
-				with self.peer_connection_lock:
+				async with self.peer_connection_lock:
 					if spkr_sid in self.peer_connections:
 						del self.peer_connections[spkr_sid]
 
@@ -801,7 +801,7 @@ class SpreedClient:
 					"tag": "track",
 				})
 				stream = AudioStream(track)
-				with self.transcriber_lock:
+				async with self.transcriber_lock:
 					self.transcribers[spkr_sid] = VoskTranscriber(spkr_sid, self.lang_id, self.transcript_queue)
 
 					try:
@@ -829,7 +829,7 @@ class SpreedClient:
 						},
 					)
 
-		with self.peer_connection_lock:
+		async with self.peer_connection_lock:
 			self.peer_connections[spkr_sid] = PeerConnection(session_id=spkr_sid, pc=pc)
 
 		await pc.setRemoteDescription(
@@ -863,7 +863,7 @@ class SpreedClient:
 
 	async def set_language(self, lang_id: str):
 		excs = []
-		with self.transcriber_lock:
+		async with self.transcriber_lock:
 			transcribers = list(self.transcribers.values())
 		try:
 			for transcriber in transcribers:

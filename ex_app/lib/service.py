@@ -5,7 +5,6 @@
 
 import asyncio
 import logging
-import threading
 
 from constants import HPB_SHUTDOWN_TIMEOUT, MAX_CONNECT_TRIES
 from livetypes import LanguageSetRequest, SigConnectResult, SpreedClientException, TranscribeRequest
@@ -19,10 +18,10 @@ class Application:
 	def __init__(self) -> None:
 		self.hpb_settings = get_hpb_settings()
 		self.spreed_clients: dict[str, SpreedClient] = {}
-		self.spreed_clients_lock = threading.RLock()
+		self.spreed_clients_lock = asyncio.Lock()
 
 	async def transcript_req(self, req: TranscribeRequest) -> None:
-		with self.spreed_clients_lock:
+		async with self.spreed_clients_lock:
 			if req.roomToken in self.spreed_clients:
 				if req.enable:
 					LOGGER.info("Already in call for room token: %s, adding NC sessiond id: %s",
@@ -34,9 +33,9 @@ class Application:
 							"tag": "application",
 						},
 					)
-					self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
+					await self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 				else:
-					self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
+					await self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
 				return
 
 		if not req.enable:
@@ -55,7 +54,7 @@ class Application:
 			"nc_session_id": req.ncSessionId,
 			"tag": "application",
 		})
-		with self.spreed_clients_lock:
+		async with self.spreed_clients_lock:
 			self.spreed_clients[req.roomToken] = SpreedClient(
 				req.roomToken,
 				self.hpb_settings,
@@ -67,7 +66,7 @@ class Application:
 		last_exc = None
 		while tries > 0:
 			try:
-				self.spreed_clients_lock.acquire()
+				await self.spreed_clients_lock.acquire()
 				conn_result = await self.spreed_clients[req.roomToken].connect()
 				match conn_result:
 					case SigConnectResult.SUCCESS:
@@ -75,7 +74,7 @@ class Application:
 							"room_token": req.roomToken,
 							"tag": "connection",
 						})
-						self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
+						await self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 						return
 					case SigConnectResult.FAILURE:
 						# do not retry
@@ -127,7 +126,7 @@ class Application:
 				f"No SpreedClient for room token {req.roomToken}, cannot set language"
 			)
 
-		with self.spreed_clients_lock:
+		async with self.spreed_clients_lock:
 			spreed_client = self.spreed_clients[req.roomToken]
 			await spreed_client.set_language(req.langId)
 
@@ -140,7 +139,7 @@ class Application:
 			})
 			return
 
-		with self.spreed_clients_lock:
+		async with self.spreed_clients_lock:
 			spreed_client = self.spreed_clients[room_token]
 			if spreed_client.defunct.is_set():
 				LOGGER.info("SpreedClient for room token %s is already closed", room_token, extra={
@@ -155,8 +154,8 @@ class Application:
 				"tag": "connection",
 			})
 
-	def __leave_call_cb(self, room_token: str):
-		with self.spreed_clients_lock:
+	async def __leave_call_cb(self, room_token: str):
+		async with self.spreed_clients_lock:
 			if room_token not in self.spreed_clients:
 				LOGGER.debug("No SpreedClient for room token %s active, cannot leave call", room_token, extra={
 					"room_token": room_token,
