@@ -19,10 +19,51 @@ class Application:
 		self.hpb_settings = get_hpb_settings()
 		self.spreed_clients: dict[str, SpreedClient] = {}
 		self.spreed_clients_lock = asyncio.Lock()
+		self.__task_bin: set[asyncio.Task] = set()
 
-	async def transcript_req(self, req: TranscribeRequest) -> None:
+	async def __defer_start_client(self, req: TranscribeRequest) -> None:
+		t = 0
+		# defer starting a new client to give time for cleanup of the previous one
+		# wait up to HPB_SHUTDOWN_TIMEOUT seconds
+		while t <= HPB_SHUTDOWN_TIMEOUT:
+			t += 5
+			await asyncio.sleep(t)
+			async with self.spreed_clients_lock:
+				if req.roomToken not in self.spreed_clients:
+					break
+		await self.transcript_req(req, deferred=True)
+
+	async def transcript_req(self, req: TranscribeRequest, deferred = False) -> None:
 		async with self.spreed_clients_lock:
 			if req.roomToken in self.spreed_clients:
+				if self.spreed_clients[req.roomToken].defunct.is_set():
+					if req.enable:
+						# defer start of a new client giving time for cleanup
+						LOGGER.info("SpreedClient for room token: %s is defunct, defering start of new client",
+							req.roomToken,
+							extra={
+								"room_token": req.roomToken,
+								"nc_session_id": req.ncSessionId,
+								"tag": "application",
+							},
+						)
+						await self.__defer_start_client(req)
+						task = asyncio.create_task(self.__defer_start_client(req))
+						self.__task_bin.add(task)
+						task.add_done_callback(self.__task_bin.discard)
+					else:
+						LOGGER.info("SpreedClient for room token: %s is already defunct,"
+							" ignoring request to disable transcription",
+							req.roomToken,
+							extra={
+								"room_token": req.roomToken,
+								"nc_session_id": req.ncSessionId,
+								"tag": "application",
+							},
+						)
+					return
+
+				# already in a call with a valid client
 				if req.enable:
 					LOGGER.info("Already in call for room token: %s, adding NC sessiond id: %s",
 						req.roomToken,
@@ -52,6 +93,7 @@ class Application:
 		LOGGER.info("Joining call for room token: %s, NC session id: %s", req.roomToken, req.ncSessionId, extra={
 			"room_token": req.roomToken,
 			"nc_session_id": req.ncSessionId,
+			"deferred": deferred,
 			"tag": "application",
 		})
 		async with self.spreed_clients_lock:
@@ -121,25 +163,25 @@ class Application:
 		) from last_exc
 
 	async def set_call_language(self, req: LanguageSetRequest) -> None:
-		if req.roomToken not in self.spreed_clients:
-			raise SpreedClientException(
-				f"No SpreedClient for room token {req.roomToken}, cannot set language"
-			)
-
 		async with self.spreed_clients_lock:
+			if req.roomToken not in self.spreed_clients:
+				raise SpreedClientException(
+					f"No SpreedClient for room token {req.roomToken}, cannot set language"
+				)
+
 			spreed_client = self.spreed_clients[req.roomToken]
 			await spreed_client.set_language(req.langId)
 
 	async def leave_call(self, room_token: str):
 		"""Leave the call for the given room token. Called from an API endpoint."""
-		if room_token not in self.spreed_clients:
-			LOGGER.info("No SpreedClient for room token %s active, cannot leave call", room_token, extra={
-				"room_token": room_token,
-				"tag": "connection",
-			})
-			return
-
 		async with self.spreed_clients_lock:
+			if room_token not in self.spreed_clients:
+				LOGGER.info("No SpreedClient for room token %s active, cannot leave call", room_token, extra={
+					"room_token": room_token,
+					"tag": "connection",
+				})
+				return
+
 			spreed_client = self.spreed_clients[room_token]
 			if spreed_client.defunct.is_set():
 				LOGGER.info("SpreedClient for room token %s is already closed", room_token, extra={
