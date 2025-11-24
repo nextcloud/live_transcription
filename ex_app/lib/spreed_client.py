@@ -340,8 +340,6 @@ class SpreedClient:
 		message["id"] = str(self.id)
 		try:
 			await self._server.send(json.dumps(message))
-			# todo: maybe "pause" transcript sends during that time
-			# todo: recheck peer connections too if all are connected or need to be re-established
 		except WebSocketException as e:
 			LOGGER.exception("HPB websocket error, reconnecting...", exc_info=e, extra={
 				"room_token": self.room_token,
@@ -840,6 +838,18 @@ class SpreedClient:
 							"room_token": self.room_token,
 							"tag": "participants",
 						})
+						async with self.peer_connection_lock:
+							if (
+								user_desc["sessionId"] in self.peer_connections
+								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "closed"
+								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "failed"
+							):
+								LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
+									"user_desc": user_desc,
+									"room_token": self.room_token,
+									"tag": "participants",
+								})
+								continue
 						await self.send_offer_request(user_desc["sessionId"])
 						continue
 
@@ -932,12 +942,15 @@ class SpreedClient:
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
 		async with self.peer_connection_lock:
-			if spkr_sid in self.peer_connections:
-				LOGGER.debug("Peer connection for %s already exists, skipping offer handling", spkr_sid, extra={
+			if (
+				spkr_sid in self.peer_connections
+				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
+				and self.peer_connections[spkr_sid].pc.connectionState != "failed"
+			):
+				LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
+					"session_id": spkr_sid,
 					"room_token": self.room_token,
-					"spkr_sid": spkr_sid,
-					"recv_message": message,
-					"tag": "offer",
+					"tag": "participants",
 				})
 				return
 
