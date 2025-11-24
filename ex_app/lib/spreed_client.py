@@ -691,6 +691,30 @@ class SpreedClient:
 					"tag": "target",
 				})
 
+	async def remove_target_hpb_sid(self, session_id: str):
+		async with self.target_lock:
+			if session_id in self.targets:
+				LOGGER.debug("Removed target", extra={
+					"session_id": session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
+					"room_token": self.room_token,
+					"tag": "target",
+				})
+				del self.targets[session_id]
+				if len(self.targets) == 0:
+					if self._deferred_close_task:
+						self._deferred_close_task.cancel()
+					self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
+			else:
+				LOGGER.debug("Target does not exist", extra={
+					"session_id": session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
+					"room_token": self.room_token,
+					"tag": "target",
+				})
+
 	async def signalling_monitor(self):  # noqa: C901
 		"""Monitor the signaling server for incoming messages."""
 		while True:
@@ -784,7 +808,7 @@ class SpreedClient:
 							if user_desc["sessionId"] in self.transcribers:
 								await self.transcribers[user_desc["sessionId"]].shutdown()
 								del self.transcribers[user_desc["sessionId"]]
-						await self.remove_target(user_desc["sessionId"])
+						await self.remove_target_hpb_sid(user_desc["sessionId"])
 						async with self.target_lock:
 							# "nextcloudSessionId" may not be present in the user_desc in call disconnects
 							self.nc_sid_map.pop(user_desc.get("nextcloudSessionId", ""), None)
