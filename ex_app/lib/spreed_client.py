@@ -1092,6 +1092,14 @@ class SpreedClient:
 			"tag": "transcript",
 		})
 		while True:
+			if self.defunct.is_set():
+				LOGGER.debug("SpreedClient is defunct, waiting before sending transcripts", extra={
+					"room_token": self.room_token,
+					"tag": "transcript",
+				})
+				await asyncio.sleep(2)
+				continue
+
 			transcript: Transcript = await self.transcript_queue.get()  # type: ignore[annotation-unchecked]
 
 			try:
