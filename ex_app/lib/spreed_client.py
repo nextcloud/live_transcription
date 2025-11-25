@@ -9,7 +9,7 @@ import json
 import logging
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from secrets import token_urlsafe
 from urllib.parse import urlparse
@@ -18,8 +18,17 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 from audio_stream import AudioStream
-from constants import CALL_LEAVE_TIMEOUT, MSG_RECEIVE_TIMEOUT
-from livetypes import CallFlag, HPBSettings, SigConnectResult, Target, Transcript, VoskException
+from constants import CALL_LEAVE_TIMEOUT, HPB_PING_TIMEOUT, MSG_RECEIVE_TIMEOUT
+from livetypes import (
+	CallFlag,
+	HPBSettings,
+	ReconnectMethod,
+	SigConnectResult,
+	SpreedRateLimitedException,
+	Target,
+	Transcript,
+	VoskException,
+)
 from models import LANGUAGE_MAP
 from nc_py_api import NextcloudApp
 from transcriber import VoskTranscriber
@@ -44,25 +53,26 @@ class SpreedClient:
 		room_token: str,
 		hpb_settings: HPBSettings,
 		lang_id: str,
-		leave_call_cb: Callable[[str], None],  # room_token
+		leave_call_cb: Callable[[str], Awaitable[None]],  # room_token
 	) -> None:
 		self.id = 0
 		self._server: ClientConnection | None = None
 		self._monitor: asyncio.Task | None = None
 		self.peer_connections: dict[str, PeerConnection] = {}
-		self.peer_connection_lock = threading.Lock()
+		self.peer_connection_lock = asyncio.Lock()
 		self.targets: dict[str, Target] = {}
-		self.target_lock = threading.Lock()
+		self.target_lock = asyncio.Lock()
 		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
 		# the first target's Nextcloud session ID, used to defer the first target add until we join the call
 		self._nc_sid_wait_stash: dict[str, None] = {}
 		self.transcript_queue: asyncio.Queue = asyncio.Queue()
 		self._transcript_sender: asyncio.Task | None = None
 		self.transcribers: dict[str, VoskTranscriber] = {}
-		self.transcriber_lock = threading.Lock()
+		self.transcriber_lock = asyncio.Lock()
 		self.defunct = threading.Event()
 		self._close_task: asyncio.Task | None = None
 		self._deferred_close_task: asyncio.Task | None = None
+		self._reconnect_task: asyncio.Task | None = None
 
 		self.resumeid = None
 		self.sessionid = None
@@ -78,7 +88,92 @@ class SpreedClient:
 		self.leave_call_cb = leave_call_cb
 
 
-	async def connect(self) -> SigConnectResult:
+	async def _resume_connection(self) -> bool:
+		"""
+		Raises
+		------
+		SpreedRateLimitedException: when the HPB server rate limits the client during resume
+		"""  # noqa
+		try:
+			await self.send_message({
+				"type": "hello",
+				"hello": {
+					"version": "2.0",
+					"resumeid": self.resumeid,
+				}
+			})
+		except Exception as e:
+			LOGGER.exception("Error resuming connection to HPB with short hello", exc_info=e, extra={
+				"room_token": self.room_token,
+				"tag": "short_resume",
+			})
+			return False
+
+		msg_counter = 0
+		# wait for the hello response with the new session ID
+		while msg_counter < 10:
+			message = await self.receive(MSG_RECEIVE_TIMEOUT)
+			if message is None:
+				LOGGER.error("No message received for %s secs while resuming, aborting...", MSG_RECEIVE_TIMEOUT, extra={
+					"room_token": self.room_token,
+					"tag": "short_resume",
+				})
+				return False
+
+			if message.get("type") == "hello":
+				self.sessionid = message["hello"]["sessionid"]
+				LOGGER.debug("Resumed connection with new session ID", extra={
+					"sessionid": self.sessionid,
+					"resumeid": self.resumeid,
+					"room_token": self.room_token,
+					"tag": "short_resume",
+				})
+				break
+
+			if message.get("type") == "error":
+				LOGGER.error(
+					"Signaling error message received during a short resume", extra={
+						"room_token": self.room_token,
+						"msg_counter": msg_counter,
+						"error_received": message,
+						"tag": "short_resume",
+					},
+				)
+
+				err_code = message.get("error", {}).get("code")
+				if err_code == "no_such_session":
+					LOGGER.info("Performing a full reconnect since the previous session expired", extra={
+						"room_token": self.room_token,
+						"msg_counter": msg_counter,
+						"tag": "short_resume",
+					})
+					return False
+
+				if err_code == "too_many_requests":
+					LOGGER.error("Rate limited by the HPB during short resume, giving up", extra={
+						"room_token": self.room_token,
+						"msg_counter": msg_counter,
+						"tag": "short_resume",
+					})
+					raise SpreedRateLimitedException()
+
+				# some other error, do not retry
+				return False
+
+			msg_counter += 1
+
+		# we did not receive the hello message for 10 messages
+		return False
+
+	async def connect(self, reconnect: ReconnectMethod = ReconnectMethod.NO_RECONNECT) -> SigConnectResult:  # noqa: C901
+		if self._server and self._server.state == WsState.OPEN:
+			LOGGER.debug("Already connected to signaling server, skipping connect", extra={
+				"room_token": self.room_token,
+				"reconnect": reconnect,
+				"tag": "connection",
+			})
+			return SigConnectResult.SUCCESS
+
 		websocket_host = urlparse(self._websocket_url).hostname
 		ssl_ctx = get_ssl_context(self._websocket_url)
 		self._server = await connect(
@@ -87,7 +182,51 @@ class SpreedClient:
 				"server_hostname": websocket_host,
 				"ssl": ssl_ctx,  # type: ignore[arg-type]
 			} if ssl_ctx else {}),
+			ping_timeout=HPB_PING_TIMEOUT,
 		)
+
+		if reconnect == ReconnectMethod.SHORT_RESUME:
+			self._reconnect_task = None
+			try:
+				res = await self._resume_connection()
+			except SpreedRateLimitedException:
+				if not self._close_task:
+					self._close_task = asyncio.create_task(self.close())
+				return SigConnectResult.FAILURE
+			if res:
+				LOGGER.info("Resumed connection to signaling server for room token: %s", self.room_token, extra={
+					"room_token": self.room_token,
+					"tag": "connection",
+				})
+				return SigConnectResult.SUCCESS
+
+			LOGGER.info("Short resume failed, performing full reconnect for room token: %s", self.room_token, extra={
+				"room_token": self.room_token,
+				"tag": "connection",
+			})
+			self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
+			return SigConnectResult.RETRY
+
+		if reconnect == ReconnectMethod.FULL_RECONNECT:
+			self._reconnect_task = None
+			LOGGER.info("Performing full reconnect for room token: %s", self.room_token, extra={
+				"room_token": self.room_token,
+				"tag": "connection",
+			})
+			try:
+				await asyncio.wait_for(self.close(keep_peers=False), CALL_LEAVE_TIMEOUT)
+			except TimeoutError:
+				LOGGER.warning("Timeout while closing SpreedClient during full reconnect, proceeding anyway", extra={
+					"room_token": self.room_token,
+					"tag": "connection",
+				})
+			finally:
+				self.defunct.set()
+				self._deferred_close_task = None
+				self._monitor = None
+				self.resumeid = None
+				self.sessionid = None
+				self._server = None
 
 		await self.send_hello()
 
@@ -169,14 +308,19 @@ class SpreedClient:
 				)
 				return SigConnectResult.RETRY
 
+		self.defunct.clear()
 		self._monitor = asyncio.create_task(self.signalling_monitor())
-		self._transcript_sender = asyncio.create_task(self.transcipt_queue_consumer())
-		# leave the call if there are no targets after some time
-		self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
+
+		# just to be safe, start the transcript sender if not already running, even in reconnects
+		if self._transcript_sender is None or self._transcript_sender.done():
+			self._transcript_sender = asyncio.create_task(self.transcipt_queue_consumer())
+
+		if reconnect == ReconnectMethod.NO_RECONNECT:
+			# leave the call if there are no targets after some time
+			self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
 
 		await self.send_incall()
 		await self.send_join()
-		self.defunct.clear()
 		LOGGER.info("Connected to signaling server", extra={
 			"room_token": self.room_token,
 			"tag": "connection",
@@ -194,10 +338,30 @@ class SpreedClient:
 
 		self.id += 1
 		message["id"] = str(self.id)
-		await self._server.send(json.dumps(message))
-		LOGGER.debug("Message sent: %s", message, extra={
+		try:
+			await self._server.send(json.dumps(message))
+		except WebSocketException as e:
+			LOGGER.exception("HPB websocket error, reconnecting...", exc_info=e, extra={
+				"room_token": self.room_token,
+				"send_message": message,
+				"tag": "send_message",
+			})
+			if not self._reconnect_task or self._reconnect_task.done():
+				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.SHORT_RESUME))
+			return
+		except Exception as e:
+			LOGGER.exception("Unexpected error send a message to HPB, ignoring", exc_info=e, extra={
+				"room_token": self.room_token,
+				"send_message": message,
+				"tag": "send_message",
+			})
+			# ignore the exception, most probably TypeError which is not expected to happen anyway
+			return
+
+		LOGGER.debug("Message sent", extra={
 			"id": self.id,
 			"room_token": self.room_token,
+			"sent_message": message,
 			"tag": "send_message",
 		})
 
@@ -306,7 +470,7 @@ class SpreedClient:
 		})
 
 	async def send_transcript(self, transcript: Transcript):
-		with self.target_lock:
+		async with self.target_lock:
 			if not self.targets:
 				LOGGER.debug("No targets to send transcript to, skipping", extra={
 					"room_token": self.room_token,
@@ -337,12 +501,11 @@ class SpreedClient:
 		]
 		await asyncio.gather(*send_tasks)
 
-	# todo: add function to reconnect to hpb, full SpreedClient lifecycle
-	async def close(self, using_resume: bool = False):  # noqa: C901
+	async def close(self, keep_peers: bool = False):  # noqa: C901
 		if self.defunct.is_set():
 			LOGGER.debug("SpreedClient is already defunct, skipping close", extra={
 				"room_token": self.room_token,
-				"using_resume": using_resume,
+				"keep_peers": keep_peers,
 				"tag": "client",
 			})
 			return
@@ -350,7 +513,7 @@ class SpreedClient:
 		if self._deferred_close_task and not self._deferred_close_task.done():
 			LOGGER.debug("Cancelling deferred close task", extra={
 				"room_token": self.room_token,
-				"using_resume": using_resume,
+				"keep_peers": keep_peers,
 				"tag": "deferred_close",
 			})
 			self._deferred_close_task.cancel()
@@ -362,7 +525,7 @@ class SpreedClient:
 			if self._monitor and not self._monitor.done():
 				LOGGER.debug("Cancelling monitor task", extra={
 					"room_token": self.room_token,
-					"using_resume": using_resume,
+					"keep_peers": keep_peers,
 					"tag": "monitor",
 				})
 				# Cancel the monitor task if it's still running
@@ -373,38 +536,39 @@ class SpreedClient:
 			await self.send_bye()
 
 		with suppress(Exception):
-			LOGGER.debug("Shutting down all transcribers", extra={
-				"room_token": self.room_token,
-				"using_resume": using_resume,
-				"tag": "transcriber",
-			})
-			for transcriber in self.transcribers.values():
-				transcriber.shutdown()
-			with self.transcriber_lock:
-				self.transcribers.clear()
+			if not keep_peers:
+				LOGGER.debug("Shutting down all transcribers", extra={
+					"room_token": self.room_token,
+					"keep_peers": keep_peers,
+					"tag": "transcriber",
+				})
+				for transcriber in self.transcribers.values():
+					await transcriber.shutdown()
+				async with self.transcriber_lock:
+					self.transcribers.clear()
 
 		with suppress(Exception):
-			if not using_resume:
+			if not keep_peers:
 				for pc in self.peer_connections.values():
 					if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
 						LOGGER.debug("Closing peer connection", extra={
 							"session_id": pc.session_id,
 							"room_token": self.room_token,
-							"using_resume": using_resume,
+							"keep_peers": keep_peers,
 							"tag": "peer_connection",
 						})
 						with suppress(Exception):
 							await pc.pc.close()
-				with self.peer_connection_lock:
+				async with self.peer_connection_lock:
 					self.peer_connections.clear()
 				self.resumeid = None
 				self.sessionid = None
 
 		with suppress(Exception):
-			if self._transcript_sender and not self._transcript_sender.done():
+			if not keep_peers and self._transcript_sender and not self._transcript_sender.done():
 				LOGGER.debug("Cancelling transcript sender task", extra={
 					"room_token": self.room_token,
-					"using_resume": using_resume,
+					"keep_peers": keep_peers,
 					"tag": "transcript",
 				})
 				self._transcript_sender.cancel()
@@ -414,17 +578,17 @@ class SpreedClient:
 			if self._server and self._server.state == WsState.OPEN:
 				LOGGER.debug("Closing WebSocket connection", extra={
 					"room_token": self.room_token,
-					"using_resume": using_resume,
+					"keep_peers": keep_peers,
 					"tag": "connection",
 				})
 				# Close the WebSocket connection if it's still open
 				await self._server.close()
 			self._server = None
 
-		if not using_resume:
+		if not keep_peers:
 			self.defunct.set()
 			if not app_closing:
-				self.leave_call_cb(self.room_token)
+				await self.leave_call_cb(self.room_token)
 
 	async def receive(self, timeout: int = 0) -> dict | None:
 		if not self._server:
@@ -448,8 +612,8 @@ class SpreedClient:
 		})
 		return message
 
-	def add_target(self, nc_session_id: str):
-		with self.target_lock:
+	async def add_target(self, nc_session_id: str):
+		async with self.target_lock:
 			if nc_session_id not in self.nc_sid_map:
 				# stash the NC session IDs until we receive the participants update
 				self._nc_sid_wait_stash[nc_session_id] = None
@@ -486,8 +650,8 @@ class SpreedClient:
 				self._deferred_close_task.cancel()
 				self._deferred_close_task = None
 
-	def remove_target(self, nc_session_id: str):
-		with self.target_lock:
+	async def remove_target(self, nc_session_id: str):
+		async with self.target_lock:
 			self._nc_sid_wait_stash.pop(nc_session_id, None)
 			if nc_session_id not in self.nc_sid_map:
 				LOGGER.debug("HPB session ID corresponding to Nextcloud session ID '%s' not found",
@@ -525,27 +689,44 @@ class SpreedClient:
 					"tag": "target",
 				})
 
+	async def remove_target_hpb_sid(self, session_id: str):
+		async with self.target_lock:
+			if session_id in self.targets:
+				LOGGER.debug("Removed target", extra={
+					"session_id": session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
+					"room_token": self.room_token,
+					"tag": "target",
+				})
+				del self.targets[session_id]
+				if len(self.targets) == 0:
+					if self._deferred_close_task:
+						self._deferred_close_task.cancel()
+					self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
+			else:
+				LOGGER.debug("Target does not exist", extra={
+					"session_id": session_id,
+					"targets": self.targets,
+					"lang_id": self.lang_id,
+					"room_token": self.room_token,
+					"tag": "target",
+				})
+
 	async def signalling_monitor(self):  # noqa: C901
 		"""Monitor the signaling server for incoming messages."""
 		while True:
-			if self.defunct.is_set():
-				LOGGER.debug("SpreedClient is defunct, stopping monitor", extra={
-					"room_token": self.room_token,
-					"tag": "monitor",
-				})
-				break
-
 			try:
 				message = await self.receive()
 			except WebSocketException as e:
-				LOGGER.exception("HPB websocket error", exc_info=e, extra={
+				LOGGER.exception("HPB websocket error, reconnecting...", exc_info=e, extra={
 					"room_token": self.room_token,
 					"tag": "monitor",
 				})
-				# todo: retry connection?
-				if not self._close_task:
-					self._close_task = asyncio.create_task(self.close())
-				break
+				if not self._reconnect_task or self._reconnect_task.done():
+					self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.SHORT_RESUME))
+				await asyncio.sleep(2)
+				continue
 			except asyncio.CancelledError:
 				LOGGER.debug("Signalling monitor task cancelled", extra={
 					"room_token": self.room_token,
@@ -621,18 +802,22 @@ class SpreedClient:
 						})
 						# the transcription should automatically stop when the audio track is closed
 						# cleaning it up in this class
-						if user_desc["sessionId"] in self.transcribers:
-							with self.transcriber_lock:
-								self.transcribers[user_desc["sessionId"]].shutdown()
+						async with self.transcriber_lock:
+							if user_desc["sessionId"] in self.transcribers:
+								await self.transcribers[user_desc["sessionId"]].shutdown()
 								del self.transcribers[user_desc["sessionId"]]
-						self.remove_target(user_desc["sessionId"])
-						with self.target_lock:
-							self.nc_sid_map.pop(user_desc["nextcloudSessionId"], None)
+						await self.remove_target_hpb_sid(user_desc["sessionId"])
+						async with self.target_lock:
+							# "nextcloudSessionId" may not be present in the user_desc in call disconnects
+							self.nc_sid_map.pop(user_desc.get("nextcloudSessionId", ""), None)
 						continue
 
 					# user connected, keep a map of Nextcloud session IDs to HPB session IDs
-					with self.target_lock:
-						self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
+					async with self.target_lock:
+						# not sure why a KeyError is hit when the monitor task is cancelled,
+						# adding a guard to prevent error logs
+						if "nextcloudSessionId" in user_desc:
+							self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
 
 					# if this is one of the deferred targets, add it to the targets
 					if (user_desc["nextcloudSessionId"] in self._nc_sid_wait_stash):
@@ -642,8 +827,8 @@ class SpreedClient:
 							"room_token": self.room_token,
 							"tag": "target",
 						})
-						self.add_target(user_desc["nextcloudSessionId"])
-						with self.target_lock:
+						await self.add_target(user_desc["nextcloudSessionId"])
+						async with self.target_lock:
 							self._nc_sid_wait_stash.pop(user_desc["nextcloudSessionId"], None)
 
 					# user connected with audio
@@ -653,6 +838,18 @@ class SpreedClient:
 							"room_token": self.room_token,
 							"tag": "participants",
 						})
+						async with self.peer_connection_lock:
+							if (
+								user_desc["sessionId"] in self.peer_connections
+								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "closed"
+								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "failed"
+							):
+								LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
+									"user_desc": user_desc,
+									"room_token": self.room_token,
+									"tag": "participants",
+								})
+								continue
 						await self.send_offer_request(user_desc["sessionId"])
 						continue
 
@@ -699,7 +896,7 @@ class SpreedClient:
 				candidate = candidate_from_sdp(message["message"]["data"]["payload"]["candidate"]["candidate"])
 				candidate.sdpMid = message["message"]["data"]["payload"]["candidate"]["sdpMid"]
 				candidate.sdpMLineIndex = message["message"]["data"]["payload"]["candidate"]["sdpMLineIndex"]
-				with self.peer_connection_lock:
+				async with self.peer_connection_lock:
 					if message["message"]["sender"]["sessionid"] not in self.peer_connections:
 						continue
 					await self.peer_connections[message["message"]["sender"]["sessionid"]].pc.addIceCandidate(candidate)
@@ -730,7 +927,7 @@ class SpreedClient:
 			self._deferred_close_task = None
 			return
 
-		with self.target_lock:
+		async with self.target_lock:
 			len_targets = len(self.targets)
 		if len_targets == 0:
 			LOGGER.debug("No transcript receivers for %s secs, leaving the call", CALL_LEAVE_TIMEOUT, extra={
@@ -744,13 +941,16 @@ class SpreedClient:
 	async def handle_offer(self, message):  # noqa: C901
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
-		with self.peer_connection_lock:
-			if spkr_sid in self.peer_connections:
-				LOGGER.debug("Peer connection for %s already exists, skipping offer handling", spkr_sid, extra={
+		async with self.peer_connection_lock:
+			if (
+				spkr_sid in self.peer_connections
+				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
+				and self.peer_connections[spkr_sid].pc.connectionState != "failed"
+			):
+				LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
+					"session_id": spkr_sid,
 					"room_token": self.room_token,
-					"spkr_sid": spkr_sid,
-					"recv_message": message,
-					"tag": "offer",
+					"tag": "participants",
 				})
 				return
 
@@ -787,7 +987,7 @@ class SpreedClient:
 					"room_token": self.room_token,
 					"tag": "peer_connection",
 				})
-				with self.peer_connection_lock:
+				async with self.peer_connection_lock:
 					if spkr_sid in self.peer_connections:
 						del self.peer_connections[spkr_sid]
 
@@ -801,7 +1001,7 @@ class SpreedClient:
 					"tag": "track",
 				})
 				stream = AudioStream(track)
-				with self.transcriber_lock:
+				async with self.transcriber_lock:
 					self.transcribers[spkr_sid] = VoskTranscriber(spkr_sid, self.lang_id, self.transcript_queue)
 
 					try:
@@ -829,7 +1029,7 @@ class SpreedClient:
 						},
 					)
 
-		with self.peer_connection_lock:
+		async with self.peer_connection_lock:
 			self.peer_connections[spkr_sid] = PeerConnection(session_id=spkr_sid, pc=pc)
 
 		await pc.setRemoteDescription(
@@ -863,7 +1063,7 @@ class SpreedClient:
 
 	async def set_language(self, lang_id: str):
 		excs = []
-		with self.transcriber_lock:
+		async with self.transcriber_lock:
 			transcribers = list(self.transcribers.values())
 		try:
 			for transcriber in transcribers:
@@ -892,6 +1092,14 @@ class SpreedClient:
 			"tag": "transcript",
 		})
 		while True:
+			if self.defunct.is_set():
+				LOGGER.debug("SpreedClient is defunct, waiting before sending transcripts", extra={
+					"room_token": self.room_token,
+					"tag": "transcript",
+				})
+				await asyncio.sleep(2)
+				continue
+
 			transcript: Transcript = await self.transcript_queue.get()  # type: ignore[annotation-unchecked]
 
 			try:

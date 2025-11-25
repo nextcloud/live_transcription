@@ -12,3 +12,4 @@ CALL_LEAVE_TIMEOUT = 60  # seconds to wait before leaving the call if there are 
 # wait VOSK_CONNECT_TIMEOUT seconds for the Vosk server handshake to complete,
 # this includes the language load time in the Vosk server
 VOSK_CONNECT_TIMEOUT = 60
+HPB_PING_TIMEOUT = 120  # seconds to wait for a ping response from HPB server

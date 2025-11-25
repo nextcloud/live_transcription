@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import os
-import threading
 from contextlib import suppress
 from functools import partial
 from time import perf_counter
@@ -30,7 +29,6 @@ class VoskTranscriber:
 		self.__voskcon: ClientConnection | None = None
 		self.__voskcon_lock = asyncio.Lock()
 		self.audio_task: asyncio.Task | None = None
-		self.__audio_task_lock = threading.RLock()
 
 		self.__resampler = AudioResampler(format="s16", layout="mono", rate=48000)
 		self.__server_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
@@ -62,36 +60,32 @@ class VoskTranscriber:
 			# todo: wait for language set confirmation
 
 	async def start(self, stream: AudioStream):
-		with self.__audio_task_lock:
-			if self.audio_task and not self.audio_task.done():
-				LOGGER.debug("Audio task already running for session_id: %s", self.__session_id, extra={
-					"session_id": self.__session_id,
-					"tag": "vosk",
-				})
-				return
-			self.audio_task = asyncio.create_task(self.__run_audio_xfer(stream))
-			self.audio_task.add_done_callback(partial(self.__done_cb, stream))
-
-	def shutdown(self):
-		with self.__audio_task_lock:
-			if self.audio_task and not self.audio_task.done():
-				LOGGER.debug("Cancelling audio task for session_id: %s", self.__session_id, extra={
-					"session_id": self.__session_id,
-					"tag": "vosk",
-				})
-				self.audio_task.cancel()
-
-	def __done_cb(self, stream: AudioStream, future: asyncio.Future):
-		with self.__audio_task_lock:
-			if not self.audio_task or self.audio_task.done():
-				return
-			LOGGER.debug("Stopping audio task for session_id: %s", self.__session_id, extra={
+		if self.audio_task and not self.audio_task.done():
+			LOGGER.debug("Audio task already running for session_id: %s", self.__session_id, extra={
 				"session_id": self.__session_id,
 				"tag": "vosk",
 			})
-			stream.stop()
-			future.cancel("Cancelling audio task in VoskTranscriber for session_id: " + self.__session_id)
-			self.audio_task = None
+			return
+		self.audio_task = asyncio.create_task(self.__run_audio_xfer(stream))
+		self.audio_task.add_done_callback(partial(self.__done_cb, stream))
+
+	async def shutdown(self):
+		if self.audio_task and not self.audio_task.done():
+			LOGGER.debug("Cancelling audio task for session_id: %s", self.__session_id, extra={
+				"session_id": self.__session_id,
+				"tag": "vosk",
+			})
+			self.audio_task.cancel()
+
+	def __done_cb(self, stream: AudioStream, future: asyncio.Future):
+		# the audio task is done, clean up
+		LOGGER.debug("Stopping audio task for session_id: %s", self.__session_id, extra={
+			"session_id": self.__session_id,
+			"tag": "vosk",
+		})
+		stream.stop()
+		future.cancel("Cancelling audio task in VoskTranscriber for session_id: " + self.__session_id)
+		self.audio_task = None
 
 	async def set_language(self, language: str) -> None:
 		if not self.__voskcon:
