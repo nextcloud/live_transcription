@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.2.3 - 2025-11-25
+
+### Fixed
+- pure asyncio locks (#44) @kyteinsky
+- prevent race condition of start when a client is shutting down (#44) @kyteinsky
+- increase HPB timeout and add reconnection logic (#44) @kyteinsky
+- use HPB session id to remove targets from signaling messages (#44) @kyteinsky
+- ensure peer connections are healthy on reconnect (#44) @kyteinsky
+- pause sending transcript until the HPB connection re-establishes (#44) @kyteinsky
+
+
 ## 1.2.2 - 2025-11-07
 
 ### Fixed
