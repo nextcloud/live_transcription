@@ -33,7 +33,7 @@ class Application:
 					break
 		await self.transcript_req(req, deferred=True)
 
-	async def transcript_req(self, req: TranscribeRequest, deferred = False) -> None:
+	async def transcript_req(self, req: TranscribeRequest, deferred: bool = False) -> None:
 		async with self.spreed_clients_lock:
 			if req.roomToken in self.spreed_clients:
 				if self.spreed_clients[req.roomToken].defunct.is_set():
@@ -47,7 +47,6 @@ class Application:
 								"tag": "application",
 							},
 						)
-						await self.__defer_start_client(req)
 						task = asyncio.create_task(self.__defer_start_client(req))
 						self.__task_bin.add(task)
 						task.add_done_callback(self.__task_bin.discard)
