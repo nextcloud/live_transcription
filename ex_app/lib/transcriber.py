@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import os
-import queue
 import threading
 from contextlib import suppress
 from functools import partial
@@ -33,7 +32,7 @@ class VoskTranscriber:
 		language: str,
 		transcript_queue: asyncio.Queue,
 		should_translate: threading.Event,
-		translate_queue_input: queue.Queue,
+		translate_queue_input: asyncio.Queue,
 	):
 		self.__voskcon: ClientConnection | None = None
 		self.__voskcon_lock = asyncio.Lock()

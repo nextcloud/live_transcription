@@ -11,6 +11,7 @@ from livetypes import (
 	RoomLanguageSetRequest,
 	SigConnectResult,
 	SpreedClientException,
+	SupportedTranslationLanguages,
 	TargetLanguageSetRequest,
 	TranscribeRequest,
 )
@@ -82,8 +83,7 @@ class Application:
 					await self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 				else:
 					await self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
-					# todo: await?
-					self.spreed_clients[req.roomToken].remove_translation(req.ncSessionId)
+					await self.spreed_clients[req.roomToken].remove_translation(req.ncSessionId)
 				return
 
 		if not req.enable:
@@ -170,17 +170,48 @@ class Application:
 		) from last_exc
 
 	async def set_call_language(self, req: RoomLanguageSetRequest) -> None:
+		"""
+		Raises
+		------
+			SpreedClientException: If no SpreedClient exists for the given room token
+		"""  # noqa
 		# todo: re-check all locks if they're asyncio
 		async with self.spreed_clients_lock:
 			if req.roomToken not in self.spreed_clients:
 				raise SpreedClientException(
-					f"No SpreedClient for room token {req.roomToken}, cannot set language"
+					f"No SpreedClient for room token {req.roomToken}, cannot set language."
+					" Start a call and add at least one participant first."
 				)
 
 			spreed_client = self.spreed_clients[req.roomToken]
 			await spreed_client.set_language(req.langId)
 
+	async def get_translation_languages(self, room_token: str) -> SupportedTranslationLanguages:
+		"""
+		Raises
+		------
+			SpreedClientException: If no SpreedClient exists for the given room token
+			TranslateFatalException: If a fatal error occurs and all translators should be removed
+			TranslateException: If any other translation error occurs
+		"""  # noqa
+		if room_token not in self.spreed_clients:
+			raise SpreedClientException(
+				f"No SpreedClient for room token {room_token}, cannot get supported origin and target languages."
+				" Start a call and add at least one participant first."
+			)
+		with self.spreed_clients_lock:
+			spreed_client = self.spreed_clients[room_token]
+			return await spreed_client.get_translation_languages()
+
 	async def set_target_language(self, req: TargetLanguageSetRequest) -> None:
+		"""
+		Raises
+		------
+			SpreedClientException: If no SpreedClient exists for the given room token
+			TranslateFatalException: If a fatal error occurs and all translators should be removed
+			TranslateLangPairException: If the language pair is not supported
+			TranslateException: If any other translation error occurs
+		"""  # noqa
 		if req.roomToken not in self.spreed_clients:
 			raise SpreedClientException(
 				f"No SpreedClient for room token {req.roomToken}, cannot set target language"
@@ -188,6 +219,9 @@ class Application:
 
 		with self.spreed_clients_lock:
 			spreed_client = self.spreed_clients[req.roomToken]
+			if req.langId is None:
+				await spreed_client.remove_translation(req.ncSessionId)
+				return
 			await spreed_client.set_target_language(req.ncSessionId, req.langId)
 
 	async def leave_call(self, room_token: str):

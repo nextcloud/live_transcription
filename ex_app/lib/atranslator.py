@@ -6,18 +6,23 @@
 import threading
 from abc import ABC, abstractmethod
 
+from livetypes import SupportedTranslationLanguages
+
 
 class ATranslator(ABC):
 	origin_language: str
 	target_language: str
+	room_token: str
 	nc_session_ids: set[str]
 	nc_session_ids_lock: threading.Lock
 
-	def __init__(self, origin_language: str, target_language: str):
-		self.origin_language = origin_language
-		self.target_language = target_language
+	def __init__(self, origin_language: str, target_language: str, room_token: str):
 		self.nc_session_ids = set()
 		self.nc_session_ids_lock = threading.Lock()
+
+		self.origin_language = origin_language
+		self.target_language = target_language
+		self.room_token = room_token
 
 	def add_session_id(self, session_id: str):
 		with self.nc_session_ids_lock:
@@ -29,4 +34,12 @@ class ATranslator(ABC):
 
 	@abstractmethod
 	async def translate(self, message: str) -> str:
+		...
+
+	@abstractmethod
+	async def is_language_pair_supported(self) -> bool:
+		...
+
+	@abstractmethod
+	async def get_translation_languages(self) -> SupportedTranslationLanguages:
 		...

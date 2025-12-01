@@ -5,11 +5,19 @@
 
 import asyncio
 import logging
-import queue
 import threading
+from functools import partial
+from time import time
 
 from atranslator import ATranslator
-from livetypes import TranslateInputOutput
+from constants import CACHE_TRANSLATION_LANGS_FOR, OCP_TASK_TIMEOUT
+from livetypes import (
+	SupportedTranslationLanguages,
+	TranslateException,
+	TranslateFatalException,
+	TranslateInputOutput,
+	TranslateLangPairException,
+)
 from ocp_translator import OCPTranslator
 
 LOGGER = logging.getLogger("lt.meta_translator")
@@ -17,22 +25,36 @@ LOGGER = logging.getLogger("lt.meta_translator")
 class MetaTranslator:
 	def __init__(
 		self,
+		room_token: str,
 		room_lang_id: str,
-		translate_queue_input: queue.Queue,
-		translate_queue_output: queue.Queue,
+		translate_queue_input: asyncio.Queue,
+		translate_queue_output: asyncio.Queue,
+		should_translate: threading.Event,
 	):
 		self.translators: dict[str, ATranslator] = {} # key: target language
-		self.translators_lock = threading.Lock()
+		self.translators_lock = threading.RLock()
 		self.sid_translation_lang_map: dict[str, str] = {}  # {"nc_session_id": "target_lang_id"}
 		self.sid_translation_lang_map_lock = threading.Lock()
 		self.task_lock = threading.Lock()
 		self.task: asyncio.Task | None = None
+		self.__asyncio_tasks_bin: set[asyncio.Task] = set()
+		self.__translation_languages_cache: tuple[float, SupportedTranslationLanguages] | None = None
 
+		self.room_token = room_token
 		self.room_lang_id = room_lang_id
 		self.translate_queue_input = translate_queue_input
 		self.translate_queue_output = translate_queue_output
+		self.should_translate = should_translate
 
-	def add_translator(self, target_lang_id: str, nc_session_id: str):
+	async def add_translator(self, target_lang_id: str, nc_session_id: str):
+		"""
+		Raises
+		------
+			TranslateFatalException: If a fatal error occurs and all translators should be removed
+			TranslateLangPairException: If the language pair is not supported
+			TranslateException: If any other translation error occurs
+		"""  # noqa
+
 		with self.sid_translation_lang_map_lock:
 			if nc_session_id in self.sid_translation_lang_map:
 				if self.sid_translation_lang_map[nc_session_id] == target_lang_id:
@@ -66,7 +88,16 @@ class MetaTranslator:
 					"tag": "translate",
 				})
 				# todo: room owner id from talk api
-				self.translators[target_lang_id] = OCPTranslator(self.room_lang_id, target_lang_id, "admin")
+				self.translators[target_lang_id] = OCPTranslator(
+					self.room_lang_id, target_lang_id, self.room_token, "admin"
+				)
+				try:
+					await self.translators[target_lang_id].is_language_pair_supported()
+				except TranslateException:
+					del self.translators[target_lang_id]
+					del self.sid_translation_lang_map[nc_session_id]
+					raise
+
 			self.translators[target_lang_id].add_session_id(nc_session_id)
 			LOGGER.debug("Added NC session id to the translator", extra={
 				"origin_language": self.room_lang_id,
@@ -74,6 +105,9 @@ class MetaTranslator:
 				"nc_session_id": nc_session_id,
 				"tag": "translate",
 			})
+
+		# todo: maybe make this and shutdown internal?
+		self.start()
 
 	def __remove_translator_int(self, target_lang_id: str, nc_session_id: str):
 		with self.translators_lock:
@@ -98,7 +132,7 @@ class MetaTranslator:
 				})
 				del self.translators[target_lang_id]
 
-	def remove_translator(self, nc_session_id: str):
+	async def remove_translator(self, nc_session_id: str):
 		with self.sid_translation_lang_map_lock:
 			if nc_session_id not in self.sid_translation_lang_map:
 				LOGGER.info("NC session id not found in the translation map when trying to remove it", extra={
@@ -115,9 +149,13 @@ class MetaTranslator:
 				"room_lang_id": self.room_lang_id,
 				"tag": "translate",
 			})
+		if self.__is_any_translation_enabled():
+			self.should_translate.set()
+		else:
+			self.should_translate.clear()
+			self.shutdown()
 
-	@property
-	def is_any_translation_enabled(self) -> bool:
+	def __is_any_translation_enabled(self) -> bool:
 		with self.sid_translation_lang_map_lock:
 			return bool(self.sid_translation_lang_map)
 
@@ -131,6 +169,7 @@ class MetaTranslator:
 				return
 			self.task = asyncio.create_task(self.__run_translation_task(), name=f"MetaTranslator-{self.room_lang_id}")
 			self.task.add_done_callback(self.__done_cb)
+		self.should_translate.set()
 
 	def shutdown(self):
 		with self.task_lock:
@@ -158,42 +197,52 @@ class MetaTranslator:
 			"tag": "translate",
 		})
 
-		# todo: debug
-		while True:
-			LOGGER.debug("Translate input queue size: %d", self.translate_queue_input.qsize(), extra={
-				"room_lang_id": self.room_lang_id,
-				"tag": "translate",
-			})
-			LOGGER.debug("Translate output queue size: %d", self.translate_queue_output.qsize(), extra={
-				"room_lang_id": self.room_lang_id,
-				"tag": "translate",
-			})
-			await asyncio.sleep(5)  # debug
+		# # todo: debug
+		# while True:
+		# 	try:
+		# 		segment: TranslateInputOutput = self.translate_queue_input.get_nowait()
+		# 		LOGGER.debug("Translate input queue item:", extra={
+		# 			"segment": segment,
+		# 			"tag": "translate",
+		# 		})
+		# 	except Exception as e:
+		# 		LOGGER.debug("Translate input queue error", exc_info=e, extra={
+		# 			"room_lang_id": self.room_lang_id,
+		# 			"tag": "translate",
+		# 		})
+		# 		await asyncio.sleep(1)
+		# 		continue
+
+		# 	LOGGER.debug("Translate input queue size: %d", self.translate_queue_input.qsize(), extra={
+		# 		"room_lang_id": self.room_lang_id,
+		# 		"tag": "translate",
+		# 	})
+		# 	LOGGER.debug("Translate output queue size: %d", self.translate_queue_output.qsize(), extra={
+		# 		"room_lang_id": self.room_lang_id,
+		# 		"tag": "translate",
+		# 	})
+		# 	await asyncio.sleep(5)  # debug
 
 		while True:
-			segment: TranslateInputOutput = self.translate_queue_input.get()  # type: ignore[annotation-unchecked]
-
+			segment: TranslateInputOutput = await self.translate_queue_input.get()  # type: ignore[annotation-unchecked]
 			# todo
-			LOGGER.debug("Got transcript segment from the input queue", extra={
-				"origin_language": segment.origin_language,
-				"target_language": segment.target_language,
-				"speaker_session_id": segment.speaker_session_id,
-				"target_nc_session_ids": segment.target_nc_session_ids,
-				"segment_message": segment.message,
-				"room_token": self.room_token,
+			LOGGER.debug("Translate input queue item:", extra={
+				"segment": segment,
 				"tag": "translate",
 			})
 
 			try:
 				with self.translators_lock:
 					for translator in self.translators.values():
-						segment.target_language = translator.target_lang_id
+						segment.target_language = translator.target_language
 						segment.target_nc_session_ids = translator.nc_session_ids.copy()
 						task = asyncio.create_task(
-							asyncio.wait_for(translator.translate(segment.message), timeout=10),
-							name=f"Translator-{segment.speaker_session_id}-{translator.target_lang_id}",
+							asyncio.wait_for(translator.translate(segment.message), timeout=OCP_TASK_TIMEOUT),
+							name=f"Translator-{segment.speaker_session_id}-{translator.target_language}",
 						)
-						task.add_done_callback(self.__translation_task_cb, segment, self.translate_queue_output)
+						task.add_done_callback(
+							partial(self.__translation_task_cb, segment, self.translate_queue_output)
+						)
 			except asyncio.CancelledError:
 				LOGGER.debug("Translation task cancelled", extra={
 					"origin_language": segment.origin_language,
@@ -202,6 +251,13 @@ class MetaTranslator:
 					"tag": "translate",
 				})
 				raise
+			except TimeoutError as e:
+				LOGGER.error("Translation task timed out: %s", e, exc_info=e, extra={
+					"origin_language": segment.origin_language,
+					"target_language": segment.target_language,
+					"nc_session_id": segment.speaker_session_id,
+					"tag": "translate",
+				})
 			except Exception as e:
 				LOGGER.error("Exception during translation task: %s", e, exc_info=e, extra={
 					"origin_language": segment.origin_language,
@@ -210,10 +266,10 @@ class MetaTranslator:
 					"tag": "translate",
 				})
 
-	async def __translation_task_cb(
+	def __translation_task_cb(
 		self,
 		segment: TranslateInputOutput,
-		output_queue: queue.Queue,
+		output_queue: asyncio.Queue,
 		future: asyncio.Future,
 	):
 		if future.cancelled():
@@ -225,8 +281,53 @@ class MetaTranslator:
 			return
 
 		exc = future.exception()
+		if isinstance(exc, TranslateFatalException):
+			LOGGER.error(
+				"Translation service task raised a fatal exception,"
+				" removing all translation clients",
+				exc_info=exc,
+				extra={
+					"origin_language": segment.origin_language,
+					"target_language": segment.target_language,
+					"tag": "translate",
+				},
+			)
+			# remove all translators
+			with self.sid_translation_lang_map_lock:
+				nc_session_ids = list(self.sid_translation_lang_map.keys())
+			with self.translators_lock:
+				for nc_session_id in nc_session_ids:
+					_t = asyncio.create_task(self.remove_translator(nc_session_id))
+					self.__asyncio_tasks_bin.add(_t)
+					_t.add_done_callback(self.__asyncio_tasks_bin.discard)
+			return
+
+		if isinstance(exc, TranslateLangPairException):
+			LOGGER.error(
+				"Translation service task raised a fatal language pair exception,"
+				" removing all translation clients for this language pair",
+				exc_info=exc,
+				extra={
+					"origin_language": segment.origin_language,
+					"target_language": segment.target_language,
+					"tag": "translate",
+				},
+			)
+			# remove all translators for this language pair
+			with self.sid_translation_lang_map_lock:
+				__nc_session_ids = [
+					sid for sid, lang in self.sid_translation_lang_map.items()
+					if lang == segment.target_language
+				]
+			with self.translators_lock:
+				for nc_session_id in __nc_session_ids:
+					_t = asyncio.create_task(self.remove_translator(nc_session_id))
+					self.__asyncio_tasks_bin.add(_t)
+					_t.add_done_callback(self.__asyncio_tasks_bin.discard)
+			return
+
 		if exc:
-			LOGGER.error("Translation task raised an exception: %s", exc, exc_info=exc, extra={
+			LOGGER.error("Translation task raised an exception", exc_info=exc, extra={
 				"origin_language": segment.origin_language,
 				"target_language": segment.target_language,
 				"tag": "translate",
@@ -242,3 +343,21 @@ class MetaTranslator:
 			"tag": "translate",
 		})
 		output_queue.put_nowait(segment)
+
+	async def is_target_lang_supported(self, target_lang_id: str) -> bool:
+		# todo: room owner id from talk api
+		tmp_translator = OCPTranslator(self.room_lang_id, target_lang_id, self.room_token, "admin")
+		return await tmp_translator.is_language_pair_supported()
+
+	async def get_translation_languages(self) -> SupportedTranslationLanguages:
+		if self.__translation_languages_cache:
+			cached_time, cached_langs = self.__translation_languages_cache
+			if (time() - cached_time) < CACHE_TRANSLATION_LANGS_FOR:
+				return cached_langs
+
+		# todo: room owner id from talk api
+		# use any target lang id, e.g. english
+		tmp_translator = OCPTranslator(self.room_lang_id, "en", self.room_token, "admin")
+		langs = await tmp_translator.get_translation_languages()
+		self.__translation_languages_cache = (time(), langs)
+		return langs
