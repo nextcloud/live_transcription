@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
 
 APP = FastAPI(lifespan=lifespan)
 APP.add_middleware(AppAPIAuthMiddleware)  # set global AppAPI authentication middleware
-ROUTER = APIRouter(prefix="/api/v1", tags=["v1"])
+ROUTER_V1 = APIRouter(prefix="/api/v1", tags=["v1"])
 
 @APP.exception_handler(SpreedClientException)
 async def spreed_client_exception_handler(request, exc: SpreedClientException):
@@ -73,7 +73,7 @@ async def get_enabled():
 	return {"enabled": ENABLED.is_set()}
 
 
-@ROUTER.post("/call/set-language",
+@ROUTER_V1.post("/call/set-language",
 	responses={
 		200: {"description": "Language set successfully for the call"},
 		400: {"description": "Invalid or unsupported language ID provided."},
@@ -99,19 +99,38 @@ async def set_call_language(req: LanguageSetRequest):
 		return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
 
 
-@ROUTER.post("/call/leave")
+@ROUTER_V1.post("/call/leave")
 async def leave_call(roomToken: str = Body(embed=True)):
 	await SERVICE.leave_call(roomToken)
 
 
-@ROUTER.post("/call/transcribe")
+@ROUTER_V1.post("/call/transcribe")
 async def transcribe_call(req: TranscribeRequest):
 	await SERVICE.transcript_req(req)
 
 
-@ROUTER.get("/languages")
+@ROUTER_V1.get("/languages")
 def get_supported_languages() -> dict[str, LanguageModel]:
 	return LANGUAGE_MAP
+
+
+APP.include_router(ROUTER_V1)
+
+
+# until capabilities is supported in nc_py_api
+@APP.get("/capabilities")
+async def get_capabilities():
+	return {
+		f"{os.environ['APP_ID']}": {
+			"version": f"{os.environ['APP_VERSION']}",
+			"features": [
+				"live_transcription",
+			],
+			"live_transcription": {
+				"supported_languages": LANGUAGE_MAP,
+			},
+		}
+	}
 
 
 def enabled_handler(enabled: bool, nc: NextcloudApp | AsyncNextcloudApp) -> str:
@@ -122,8 +141,6 @@ def enabled_handler(enabled: bool, nc: NextcloudApp | AsyncNextcloudApp) -> str:
 		ENABLED.clear()
 	return ""
 
-
-APP.include_router(ROUTER)
 
 if __name__ == "__main__":
 	os.chdir(Path(__file__).parent)
