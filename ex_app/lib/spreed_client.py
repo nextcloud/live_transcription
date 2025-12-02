@@ -549,6 +549,14 @@ class SpreedClient:
 			self._deferred_close_task.cancel()
 			self._deferred_close_task = None
 
+		if self._reconnect_task and not self._reconnect_task.done():
+			LOGGER.debug("Cancelling reconnect task", extra={
+				"room_token": self.room_token,
+				"tag": "reconnect",
+			})
+			self._reconnect_task.cancel()
+			self._reconnect_task = None
+
 		app_closing = self._monitor.cancelled() if self._monitor else False
 
 		with suppress(Exception):
