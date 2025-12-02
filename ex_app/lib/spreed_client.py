@@ -176,14 +176,22 @@ class SpreedClient:
 
 		websocket_host = urlparse(self._websocket_url).hostname
 		ssl_ctx = get_ssl_context(self._websocket_url)
-		self._server = await connect(
-			self._websocket_url,
-			**({
-				"server_hostname": websocket_host,
-				"ssl": ssl_ctx,  # type: ignore[arg-type]
-			} if ssl_ctx else {}),
-			ping_timeout=HPB_PING_TIMEOUT,
-		)
+		try:
+			self._server = await connect(
+				self._websocket_url,
+				**({
+					"server_hostname": websocket_host,
+					"ssl": ssl_ctx,  # type: ignore[arg-type]
+				} if ssl_ctx else {}),
+				ping_timeout=HPB_PING_TIMEOUT,
+			)
+		except Exception as e:
+			LOGGER.exception("Error connecting to signaling server, retrying...", exc_info=e, extra={
+				"room_token": self.room_token,
+				"reconnect": reconnect,
+				"tag": "connection",
+			})
+			return SigConnectResult.RETRY
 
 		if reconnect == ReconnectMethod.SHORT_RESUME:
 			self._reconnect_task = None
@@ -193,6 +201,14 @@ class SpreedClient:
 				if not self._close_task:
 					self._close_task = asyncio.create_task(self.close())
 				return SigConnectResult.FAILURE
+			except Exception as e:
+				LOGGER.exception("Unexpected error during short resume, retrying connection", exc_info=e, extra={
+					"room_token": self.room_token,
+					"tag": "connection",
+				})
+				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.SHORT_RESUME))
+				return SigConnectResult.RETRY
+
 			if res:
 				LOGGER.info("Resumed connection to signaling server for room token: %s", self.room_token, extra={
 					"room_token": self.room_token,
