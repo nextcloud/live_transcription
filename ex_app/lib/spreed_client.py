@@ -191,6 +191,8 @@ class SpreedClient:
 				"reconnect": reconnect,
 				"tag": "connection",
 			})
+			if reconnect != ReconnectMethod.NO_RECONNECT:
+				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
 			return SigConnectResult.RETRY
 
 		if reconnect == ReconnectMethod.SHORT_RESUME:
@@ -206,7 +208,8 @@ class SpreedClient:
 					"room_token": self.room_token,
 					"tag": "connection",
 				})
-				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.SHORT_RESUME))
+				if reconnect != ReconnectMethod.NO_RECONNECT:
+					self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.SHORT_RESUME))
 				return SigConnectResult.RETRY
 
 			if res:
@@ -222,7 +225,8 @@ class SpreedClient:
 				"room_token": self.room_token,
 				"tag": "connection",
 			})
-			self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
+			if reconnect != ReconnectMethod.NO_RECONNECT:
+				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
 			return SigConnectResult.RETRY
 
 		if reconnect == ReconnectMethod.FULL_RECONNECT:
@@ -283,6 +287,10 @@ class SpreedClient:
 						"msg_counter": msg_counter,
 						"tag": "connection",
 					})
+					if reconnect != ReconnectMethod.NO_RECONNECT:
+						self._reconnect_task = asyncio.create_task(
+							self.connect(reconnect=ReconnectMethod.FULL_RECONNECT),
+						)
 					return SigConnectResult.RETRY
 
 				return SigConnectResult.FAILURE
@@ -324,6 +332,8 @@ class SpreedClient:
 						"tag": "connection",
 					},
 				)
+				if reconnect != ReconnectMethod.NO_RECONNECT:
+					self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
 				return SigConnectResult.RETRY
 
 		self.defunct.clear()
