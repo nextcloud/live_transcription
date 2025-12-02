@@ -189,7 +189,7 @@ class Application:
 				})
 				return
 
-			await spreed_client.close(keep_peers=False)
+			await spreed_client.close()
 			LOGGER.info("Left call for room token %s", room_token, extra={
 				"room_token": room_token,
 				"tag": "connection",
