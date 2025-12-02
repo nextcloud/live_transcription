@@ -128,7 +128,7 @@ class SpreedClient:
 					"room_token": self.room_token,
 					"tag": "short_resume",
 				})
-				break
+				return True
 
 			if message.get("type") == "error":
 				LOGGER.error(
