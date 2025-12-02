@@ -192,6 +192,7 @@ class SpreedClient:
 				"tag": "connection",
 			})
 			if reconnect != ReconnectMethod.NO_RECONNECT:
+				await asyncio.sleep(2)
 				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
 			return SigConnectResult.RETRY
 
@@ -226,6 +227,7 @@ class SpreedClient:
 				"tag": "connection",
 			})
 			if reconnect != ReconnectMethod.NO_RECONNECT:
+				await asyncio.sleep(2)
 				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
 			return SigConnectResult.RETRY
 
@@ -288,6 +290,7 @@ class SpreedClient:
 						"tag": "connection",
 					})
 					if reconnect != ReconnectMethod.NO_RECONNECT:
+						await asyncio.sleep(2)
 						self._reconnect_task = asyncio.create_task(
 							self.connect(reconnect=ReconnectMethod.FULL_RECONNECT),
 						)
@@ -333,6 +336,7 @@ class SpreedClient:
 					},
 				)
 				if reconnect != ReconnectMethod.NO_RECONNECT:
+					await asyncio.sleep(2)
 					self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
 				return SigConnectResult.RETRY
 
