@@ -238,7 +238,7 @@ class SpreedClient:
 				"tag": "connection",
 			})
 			try:
-				await asyncio.wait_for(self.close(keep_peers=False), CALL_LEAVE_TIMEOUT)
+				await asyncio.wait_for(self.close(), CALL_LEAVE_TIMEOUT)
 			except TimeoutError:
 				LOGGER.warning("Timeout while closing SpreedClient during full reconnect, proceeding anyway", extra={
 					"room_token": self.room_token,
@@ -533,11 +533,10 @@ class SpreedClient:
 		]
 		await asyncio.gather(*send_tasks)
 
-	async def close(self, keep_peers: bool = False):  # noqa: C901
+	async def close(self):  # noqa: C901
 		if self.defunct.is_set():
 			LOGGER.debug("SpreedClient is already defunct, skipping close", extra={
 				"room_token": self.room_token,
-				"keep_peers": keep_peers,
 				"tag": "client",
 			})
 			return
@@ -545,7 +544,6 @@ class SpreedClient:
 		if self._deferred_close_task and not self._deferred_close_task.done():
 			LOGGER.debug("Cancelling deferred close task", extra={
 				"room_token": self.room_token,
-				"keep_peers": keep_peers,
 				"tag": "deferred_close",
 			})
 			self._deferred_close_task.cancel()
@@ -557,7 +555,6 @@ class SpreedClient:
 			if self._monitor and not self._monitor.done():
 				LOGGER.debug("Cancelling monitor task", extra={
 					"room_token": self.room_token,
-					"keep_peers": keep_peers,
 					"tag": "monitor",
 				})
 				# Cancel the monitor task if it's still running
@@ -568,39 +565,34 @@ class SpreedClient:
 			await self.send_bye()
 
 		with suppress(Exception):
-			if not keep_peers:
-				LOGGER.debug("Shutting down all transcribers", extra={
-					"room_token": self.room_token,
-					"keep_peers": keep_peers,
-					"tag": "transcriber",
-				})
-				for transcriber in self.transcribers.values():
-					await transcriber.shutdown()
-				async with self.transcriber_lock:
-					self.transcribers.clear()
+			LOGGER.debug("Shutting down all transcribers", extra={
+				"room_token": self.room_token,
+				"tag": "transcriber",
+			})
+			for transcriber in self.transcribers.values():
+				await transcriber.shutdown()
+			async with self.transcriber_lock:
+				self.transcribers.clear()
 
 		with suppress(Exception):
-			if not keep_peers:
-				for pc in self.peer_connections.values():
-					if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
-						LOGGER.debug("Closing peer connection", extra={
-							"session_id": pc.session_id,
-							"room_token": self.room_token,
-							"keep_peers": keep_peers,
-							"tag": "peer_connection",
-						})
-						with suppress(Exception):
-							await pc.pc.close()
-				async with self.peer_connection_lock:
-					self.peer_connections.clear()
-				self.resumeid = None
-				self.sessionid = None
+			for pc in self.peer_connections.values():
+				if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
+					LOGGER.debug("Closing peer connection", extra={
+						"session_id": pc.session_id,
+						"room_token": self.room_token,
+						"tag": "peer_connection",
+					})
+					with suppress(Exception):
+						await pc.pc.close()
+			async with self.peer_connection_lock:
+				self.peer_connections.clear()
+			self.resumeid = None
+			self.sessionid = None
 
 		with suppress(Exception):
-			if not keep_peers and self._transcript_sender and not self._transcript_sender.done():
+			if self._transcript_sender and not self._transcript_sender.done():
 				LOGGER.debug("Cancelling transcript sender task", extra={
 					"room_token": self.room_token,
-					"keep_peers": keep_peers,
 					"tag": "transcript",
 				})
 				self._transcript_sender.cancel()
@@ -610,17 +602,15 @@ class SpreedClient:
 			if self._server and self._server.state == WsState.OPEN:
 				LOGGER.debug("Closing WebSocket connection", extra={
 					"room_token": self.room_token,
-					"keep_peers": keep_peers,
 					"tag": "connection",
 				})
 				# Close the WebSocket connection if it's still open
 				await self._server.close()
 			self._server = None
 
-		if not keep_peers:
-			self.defunct.set()
-			if not app_closing:
-				await self.leave_call_cb(self.room_token)
+		self.defunct.set()
+		if not app_closing:
+			await self.leave_call_cb(self.room_token)
 
 	async def receive(self, timeout: int = 0) -> dict | None:
 		if not self._server:
