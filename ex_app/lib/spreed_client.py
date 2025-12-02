@@ -166,7 +166,7 @@ class SpreedClient:
 		return False
 
 	async def connect(self, reconnect: ReconnectMethod = ReconnectMethod.NO_RECONNECT) -> SigConnectResult:  # noqa: C901
-		if self._server and self._server.state == WsState.OPEN:
+		if self._server and self._server.state == WsState.OPEN and reconnect != ReconnectMethod.FULL_RECONNECT:
 			LOGGER.debug("Already connected to signaling server, skipping connect", extra={
 				"room_token": self.room_token,
 				"reconnect": reconnect,
@@ -198,6 +198,8 @@ class SpreedClient:
 					"room_token": self.room_token,
 					"tag": "connection",
 				})
+				await self.send_incall()
+				await self.send_join()
 				return SigConnectResult.SUCCESS
 
 			LOGGER.info("Short resume failed, performing full reconnect for room token: %s", self.room_token, extra={
