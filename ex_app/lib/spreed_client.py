@@ -789,6 +789,10 @@ class SpreedClient:
 					# this is most probably related to a transcript reception failure on HPB side
 					# we can try to continue
 					continue
+				if message.get("error", {}).get("code") == "client_not_found":
+					# "No MCU client found to send message to."
+					# transcript sent to a participant who is not in the call anymore
+					continue
 
 				# only close if the error is not recoverable
 				if not self._close_task:
