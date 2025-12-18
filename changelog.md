@@ -11,6 +11,21 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.3.0 - 2025-12-02
+
+### Added
+- add /capabilities endpoint (#47) @kyteinsky
+
+### Fixed
+- clear reconnection task in the HPB close() (#48) @kyteinsky
+- remove redundant keep_peers arg in HPB close() (#48) @kyteinsky
+- delay 2 secs between reconnection tries (#48) @kyteinsky
+- conditional reconnection (#48) @kyteinsky
+- catch HPB server connection exceptions (#48) @kyteinsky
+- join the call after short resume (#48) @kyteinsky
+- continue with normal ops if short resume succeeds (#48) @kyteinsky
+
+
 ## 1.2.3 - 2025-11-25
 
 ### Fixed

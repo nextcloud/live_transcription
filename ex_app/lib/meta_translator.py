@@ -6,7 +6,6 @@
 import asyncio
 import logging
 import threading
-from functools import partial
 from time import time
 
 from atranslator import ATranslator
