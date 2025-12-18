@@ -142,3 +142,11 @@ class TranslateLangPairException(TranslateFatalException):
 
 	Indicates that the language pair is not supported by the translation service.
 	"""
+
+
+class TranscriptTargetNotFoundException(Exception):
+	"""Exception for missing transcript target.
+
+	Indicates that the transcript target participant has not enabled transcription yet
+	for the call and thus cannot receive translated transcripts.
+	"""

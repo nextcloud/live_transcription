@@ -14,11 +14,12 @@ CALL_LEAVE_TIMEOUT = 60  # seconds to wait before leaving the call if there are 
 VOSK_CONNECT_TIMEOUT = 60
 HPB_PING_TIMEOUT = 120  # seconds to wait for a ping response from HPB server
 OCP_TASK_PROC_SCHED_RETRIES = 3
-OCP_TASK_TIMEOUT = 60  # seconds to wait for a translation task to complete
+OCP_TASK_TIMEOUT = 30  # seconds to wait for a translation task to complete
 SEND_TIMEOUT = 10  # timeout for sending transcripts and translations
 # factor by which to increase the timeout on each timeout occurrence for transcripts and translations
 TIMEOUT_INCREASE_FACTOR = 1.5
 CACHE_TRANSLATION_LANGS_FOR = 15 * 60  # cache translation languages for 15 minutes
+CACHE_TRANSLATION_TASK_TYPES_FOR = 15 * 60  # cache translation task types for 15 minutes
 
 # todo
 MAX_TRANSCRIPT_SEND_TIMEOUT = 30

@@ -2,7 +2,6 @@ aiortc
 av
 dotenv
 huggingface_hub
-# pin it to the version before niquests
 nc_py_api
 niquests
 print_color

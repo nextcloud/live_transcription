@@ -36,6 +36,7 @@ from livetypes import (
 	SupportedTranslationLanguages,
 	Target,
 	Transcript,
+	TranscriptTargetNotFoundException,
 	TranslateInputOutput,
 	TranslateLangPairException,
 	VoskException,
@@ -344,7 +345,7 @@ class SpreedClient:
 
 		# just to be safe, start the translate sender if not already running, even in reconnects
 		# todo: or maybe only when requested?
-		if self._transcript_sender is None or self._transcript_sender.done():
+		if self.translated_text_sender is None or self.translated_text_sender.done():
 			self.translated_text_sender = asyncio.create_task(
 				self.translated_text_consumer(),
 				name=f"translated_text_sender-{self.room_token}",
@@ -646,7 +647,7 @@ class SpreedClient:
 
 		with suppress(Exception):
 			self.should_translate.clear()
-			self.meta_translator.shutdown()
+			await self.meta_translator.shutdown()
 			# todo: for all queues, use join? Flush the queues and then cancel the tasks.
 			# self.translate_queue_input.shutdown()
 			if self.translated_text_sender and not self.translated_text_sender.done():
@@ -733,6 +734,11 @@ class SpreedClient:
 			if self._deferred_close_task:
 				self._deferred_close_task.cancel()
 				self._deferred_close_task = None
+
+	async def is_target(self, nc_session_id: str):
+		"""Check if the given Nextcloud session ID corresponds to an active transcript target."""
+		async with self.target_lock:
+			return nc_session_id in self.nc_sid_map or nc_session_id in self._nc_sid_wait_stash
 
 	async def remove_target(self, nc_session_id: str):
 		async with self.target_lock:
@@ -1268,6 +1274,7 @@ class SpreedClient:
 			TranslateFatalException: If a fatal error occurs and all translators should be removed
 			TranslateLangPairException: If the language pair is not supported
 			TranslateException: If any other translation error occurs
+			TranscriptTargetNotFoundException: If the transcript target is not found
 		"""  # noqa
 
 		if target_lang_id == self.lang_id:
@@ -1280,6 +1287,12 @@ class SpreedClient:
 			})
 			raise TranslateLangPairException(
 				f"Target language '{target_lang_id}' is the same as the original language '{self.lang_id}'",
+			)
+
+		if not self.is_target(nc_session_id) and not await self.meta_translator.is_translation_target(nc_session_id):
+			raise TranscriptTargetNotFoundException(
+				f"Transcript target with Nextcloud session ID '{nc_session_id}' not found."
+				" Transcription must be enabled for the target before setting the translation language.",
 			)
 
 		if not self.meta_translator.is_target_lang_supported(target_lang_id):

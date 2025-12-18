@@ -19,6 +19,7 @@ from livetypes import (
 	TranscribeRequest,
 	TranslateFatalException,
 	TranslateLangPairException,
+	TranscriptTargetNotFoundException,
 	VoskException,
 )
 from dotenv import load_dotenv
@@ -45,10 +46,11 @@ LOGGER = logging.getLogger("lt")
 SERVICE: Application
 ENABLED = Event()
 MODELS_TO_FETCH = {
-	"Nextcloud-AI/vosk-models": {
-		"local_dir": persistent_storage(),
-		"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
-	}
+	# todo: some huggingface_hub/tqdm error
+	# "Nextcloud-AI/vosk-models": {
+	# 	"local_dir": persistent_storage(),
+	# 	"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
+	# }
 }
 # todo: declarative settings for language override and model download
 
@@ -154,6 +156,10 @@ async def get_translation_languages(roomToken: str) -> SupportedTranslationLangu
 		200: {"description": "Target translation language set successfully for the participant."},
 		400: {"description": "Invalid, unsupported or same language ID provided as the origin language."},
 		404: {"description": "Spreed client not found for the provided room token."},
+		412: {"description": (
+			"The participant has not yet enabled transcription in the call,"
+			" which is required to receive translated text."
+		)},
 		500: {"description": "Failed to set the target translation language for the participant."},
 		550: {"description": (
 			"A fatal error occurred while setting the target translation language for the participant."
@@ -168,10 +174,12 @@ async def set_target_language(req: TargetLanguageSetRequest):
 			status_code=200,
 			content={"message": "Target translation language set successfully for the participant."},
 		)
-	except SpreedClientException as e:
-		return JSONResponse(status_code=404, content={"error": str(e)})
 	except TranslateLangPairException as e:
 		return JSONResponse(status_code=400, content={"error": str(e)})
+	except SpreedClientException as e:
+		return JSONResponse(status_code=404, content={"error": str(e)})
+	except TranscriptTargetNotFoundException as e:
+		return JSONResponse(status_code=412, content={"error": str(e)})
 	except TranslateFatalException as e:
 		LOGGER.warning("TranslateFatalException during set_target_language", exc_info=e)
 		return JSONResponse(status_code=550, content={"error": str(e)})

@@ -10,7 +10,7 @@ from typing import Literal
 
 import niquests
 from atranslator import ATranslator
-from constants import OCP_TASK_PROC_SCHED_RETRIES
+from constants import CACHE_TRANSLATION_TASK_TYPES_FOR, OCP_TASK_PROC_SCHED_RETRIES
 from livetypes import (
 	LanguageModel,
 	SupportedTranslationLanguages,
@@ -88,6 +88,7 @@ class OCPTranslator(ATranslator):
 		self.room_owner_id = room_owner_id
 
 		self.__ocp_origin_lang_id = origin_language
+		self.__task_types_cache: tuple[float, TaskTypesResponse] | None = None
 
 	async def translate(self, message: str) -> str:  # noqa: C901
 		nc = AsyncNextcloudApp()
@@ -210,10 +211,14 @@ class OCPTranslator(ATranslator):
 
 		return task.output["output"]
 
-	# todo: timed caching like done in the other place
 	async def __get_task_types(self) -> TaskTypesResponse:
 		nc = AsyncNextcloudApp()
 		await nc.set_user(self.room_owner_id)
+
+		if self.__task_types_cache:
+			cached_time, cached_ttypes = self.__task_types_cache
+			if (time.time() - cached_time) < CACHE_TRANSLATION_TASK_TYPES_FOR:
+				return cached_ttypes
 
 		try:
 			response = await nc.ocs(
@@ -250,6 +255,7 @@ class OCPTranslator(ATranslator):
 				' shutting down translator.',
 			)
 
+		self.__task_types_cache = (time.time(), task_types)
 		return task_types
 
 	async def is_language_pair_supported(self):

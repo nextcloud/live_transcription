@@ -199,7 +199,7 @@ class Application:
 				f"No SpreedClient for room token {room_token}, cannot get supported origin and target languages."
 				" Start a call and add at least one participant first."
 			)
-		with self.spreed_clients_lock:
+		async with self.spreed_clients_lock:
 			spreed_client = self.spreed_clients[room_token]
 			return await spreed_client.get_translation_languages()
 
@@ -211,13 +211,14 @@ class Application:
 			TranslateFatalException: If a fatal error occurs and all translators should be removed
 			TranslateLangPairException: If the language pair is not supported
 			TranslateException: If any other translation error occurs
+			TranscriptTargetNotFoundException: If the transcript target is not found
 		"""  # noqa
 		if req.roomToken not in self.spreed_clients:
 			raise SpreedClientException(
 				f"No SpreedClient for room token {req.roomToken}, cannot set target language"
 			)
 
-		with self.spreed_clients_lock:
+		async with self.spreed_clients_lock:
 			spreed_client = self.spreed_clients[req.roomToken]
 			if req.langId is None:
 				await spreed_client.remove_translation(req.ncSessionId)
