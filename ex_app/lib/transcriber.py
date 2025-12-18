@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from contextlib import suppress
 from functools import partial
 from time import perf_counter
@@ -16,7 +17,7 @@ from aiortc.mediastreams import MediaStreamError
 from audio_stream import AudioStream
 from av.audio.resampler import AudioResampler
 from constants import MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL, VOSK_CONNECT_TIMEOUT
-from livetypes import StreamEndedException, Transcript, VoskException
+from livetypes import StreamEndedException, Transcript, TranslateInputOutput, VoskException
 from models import LANGUAGE_MAP
 from utils import get_ssl_context
 from websockets import ClientConnection, connect
@@ -25,7 +26,14 @@ LOGGER = logging.getLogger("lt.transcriber")
 
 
 class VoskTranscriber:
-	def __init__(self, session_id: str, language: str, transcript_queue: asyncio.Queue):
+	def __init__(
+		self,
+		session_id: str,
+		language: str,
+		transcript_queue: asyncio.Queue,
+		should_translate: threading.Event,
+		translate_queue_input: asyncio.Queue,
+	):
 		self.__voskcon: ClientConnection | None = None
 		self.__voskcon_lock = asyncio.Lock()
 		self.audio_task: asyncio.Task | None = None
@@ -36,6 +44,8 @@ class VoskTranscriber:
 		self.__session_id = session_id
 		self.__language = language
 		self.__transcript_queue = transcript_queue
+		self.__should_translate = should_translate
+		self.__translate_queue_input = translate_queue_input
 
 	async def connect(self):
 		ssl_ctx = get_ssl_context(self.__server_url)
@@ -215,6 +225,22 @@ class VoskTranscriber:
 					speaker_session_id=self.__session_id,
 				))
 				last_sent = perf_counter()
+
+				if is_final and self.__should_translate.is_set():
+					# todo
+					LOGGER.debug("Queuing message for translation", extra={
+						"origin_language": self.__language,
+						"transcript": message,
+						"session_id": self.__session_id,
+						"tag": "translate",
+					})
+					self.__translate_queue_input.put_nowait(TranslateInputOutput(
+						origin_language=self.__language,
+						target_language="",  # to be filled by MetaTranslator
+						message=message,
+						speaker_session_id=self.__session_id,
+						target_nc_session_ids=set(),  # to be filled by MetaTranslator
+					))
 		except (StreamEndedException, MediaStreamError):
 			LOGGER.debug("Audio stream ended for session id: %s", self.__session_id, extra={
 				"session_id": self.__session_id,

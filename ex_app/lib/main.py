@@ -10,8 +10,18 @@ from pathlib import Path
 from threading import Event
 
 # isort: off
-from livetypes import LanguageSetRequest, SpreedClientException, TranscribeRequest, VoskException
-
+from livetypes import (
+	LanguageModel,
+	RoomLanguageSetRequest,
+	SpreedClientException,
+	SupportedTranslationLanguages,
+	TargetLanguageSetRequest,
+	TranscribeRequest,
+	TranslateFatalException,
+	TranslateLangPairException,
+	TranscriptTargetNotFoundException,
+	VoskException,
+)
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -22,11 +32,12 @@ if __skip_cert_verify in ("true", "1"):
 # isort: on
 
 import uvicorn
+from caps import get_supported_translation_languages
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from logger import get_logging_config, setup_logging
-from models import LANGUAGE_MAP, LanguageModel
+from models import VOSK_SUPPORTED_LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers, setup_nextcloud_logging
 from service import Application
@@ -36,10 +47,11 @@ LOGGER = logging.getLogger("lt")
 SERVICE: Application
 ENABLED = Event()
 MODELS_TO_FETCH = {
-	"Nextcloud-AI/vosk-models": {
-		"local_dir": persistent_storage(),
-		"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
-	}
+	# todo: some huggingface_hub/tqdm error
+	# "Nextcloud-AI/vosk-models": {
+	# 	"local_dir": persistent_storage(),
+	# 	"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
+	# }
 }
 # todo: declarative settings for language override and model download
 
@@ -80,12 +92,12 @@ async def get_enabled():
 		404: {"description": "Spreed client not found for the provided room token."},
 		500: {"description": "Failed to set language for the call."}
 	})
-async def set_call_language(req: LanguageSetRequest):
+async def set_call_language(req: RoomLanguageSetRequest):
 	try:
-		if not req.langId or req.langId not in LANGUAGE_MAP:
+		if not req.langId or req.langId not in VOSK_SUPPORTED_LANGUAGE_MAP:
 			return JSONResponse(
 				status_code=400,
-				content={"error": "Invalid or unsupported language ID provided."}
+				content={"error": "Invalid or unsupported language ID provided."},
 			)
 		await SERVICE.set_call_language(req)
 		return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
@@ -97,6 +109,88 @@ async def set_call_language(req: LanguageSetRequest):
 	except Exception as e:
 		LOGGER.exception("Exception during set_call_language", exc_info=e)
 		return JSONResponse(status_code=500, content={"error": "Failed to set language for the call"})
+
+
+# for translation
+@ROUTER_V1.get("/translation/languages", responses={
+		200: {"description": "Supported origin and target translation languages fetched successfully."},
+		404: {"description": "Spreed client not found for the provided room token."},
+		500: {"description": "An error occurred while fetching supported origin and target translation languages."},
+		550: {"description": (
+			"A fatal error occurred while fetching supported origin and target translation languages."
+			" Do not retry any further attempts until the underlying issue is resolved."
+			" The translation provider may be not installed or misconfigured. See the logs for details."
+		)},
+	},
+	response_model=None,
+	description=(
+		"Fetch supported origin and target translation languages."
+		' The origin language list can contain "detect_language" as a special value indicating auto-detection support.'
+	),
+)
+async def get_translation_languages(roomToken: str) -> SupportedTranslationLanguages | JSONResponse:
+	try:
+		# todo: convert this to the caps way of fetching supported translation languages?
+		return await SERVICE.get_translation_languages(roomToken)
+	except SpreedClientException as e:
+		return JSONResponse(status_code=404, content={"error": str(e)})
+	except TranslateFatalException as e:
+		LOGGER.warning("TranslateFatalException during get_translation_languages", exc_info=e)
+		return JSONResponse(
+			status_code=550,
+			content={"error": "A fatal error occurred while fetching translation languages."},
+		)
+	except Exception as e:
+		LOGGER.exception("Exception during get_translation_languages", exc_info=e)
+		return JSONResponse(
+			status_code=500,
+			content={"error": "An error occurred while fetching translation languages."},
+		)
+
+
+# for translation
+@ROUTER_V1.post("/translation/set-target-language",
+	description=(
+		"Set the target translation language for a participant in a call."
+		" Set langId to null to disable translation for the participant."
+	),
+	responses={
+		200: {"description": "Target translation language set successfully for the participant."},
+		400: {"description": "Invalid, unsupported or same language ID provided as the origin language."},
+		404: {"description": "Spreed client not found for the provided room token."},
+		412: {"description": (
+			"The participant has not yet enabled transcription in the call,"
+			" which is required to receive translated text."
+		)},
+		500: {"description": "Failed to set the target translation language for the participant."},
+		550: {"description": (
+			"A fatal error occurred while setting the target translation language for the participant."
+			" Do not retry any further translation attempts until the underlying issue is resolved."
+			" The translation provider may be not installed or misconfigured. See the logs for details."
+		)},
+	})
+async def set_target_language(req: TargetLanguageSetRequest):
+	try:
+		await SERVICE.set_target_language(req)
+		return JSONResponse(
+			status_code=200,
+			content={"message": "Target translation language set successfully for the participant."},
+		)
+	except TranslateLangPairException as e:
+		return JSONResponse(status_code=400, content={"error": str(e)})
+	except SpreedClientException as e:
+		return JSONResponse(status_code=404, content={"error": str(e)})
+	except TranscriptTargetNotFoundException as e:
+		return JSONResponse(status_code=412, content={"error": str(e)})
+	except TranslateFatalException as e:
+		LOGGER.warning("TranslateFatalException during set_target_language", exc_info=e)
+		return JSONResponse(status_code=550, content={"error": str(e)})
+	except Exception as e:
+		LOGGER.exception("Exception during set_target_language", exc_info=e)
+		return JSONResponse(
+			status_code=500,
+			content={"error": "Failed to set the target translation language for the participant."},
+		)
 
 
 @ROUTER_V1.post("/call/leave")
@@ -111,7 +205,7 @@ async def transcribe_call(req: TranscribeRequest):
 
 @ROUTER_V1.get("/languages")
 def get_supported_languages() -> dict[str, LanguageModel]:
-	return LANGUAGE_MAP
+	return VOSK_SUPPORTED_LANGUAGE_MAP
 
 
 APP.include_router(ROUTER_V1)
@@ -119,16 +213,28 @@ APP.include_router(ROUTER_V1)
 
 # until capabilities is supported in nc_py_api
 @APP.get("/capabilities")
-async def get_capabilities():
+async def get_capabilities() -> dict[str, dict]:
+	try:
+		supported_translation_languages = await get_supported_translation_languages()
+	except Exception as e:
+		LOGGER.exception("Failed to get supported translation languages for capabilities", exc_info=e)
+		supported_translation_languages = None
+
 	return {
 		f"{os.environ['APP_ID']}": {
 			"version": f"{os.environ['APP_VERSION']}",
 			"features": [
 				"live_transcription",
+				*(["live_translation"] if supported_translation_languages else []),
 			],
 			"live_transcription": {
-				"supported_languages": LANGUAGE_MAP,
+				"supported_languages": VOSK_SUPPORTED_LANGUAGE_MAP,
 			},
+			**({
+				"live_translation": {
+					"supported_translation_languages": supported_translation_languages,
+				},
+			} if supported_translation_languages else {}),
 		}
 	}
 

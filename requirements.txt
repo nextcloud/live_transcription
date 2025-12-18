@@ -2,8 +2,8 @@ aiortc
 av
 dotenv
 huggingface_hub
-# pin it to the version before niquests
-nc_py_api==0.20.2
+nc_py_api
+niquests
 print_color
 pydantic
 requests

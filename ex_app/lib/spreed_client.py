@@ -18,17 +18,30 @@ from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
 from aiortc.sdp import candidate_from_sdp
 from audio_stream import AudioStream
-from constants import CALL_LEAVE_TIMEOUT, HPB_PING_TIMEOUT, MSG_RECEIVE_TIMEOUT
+from constants import (
+	CALL_LEAVE_TIMEOUT,
+	HPB_PING_TIMEOUT,
+	MAX_TRANSCRIPT_SEND_TIMEOUT,
+	MAX_TRANSLATION_SEND_TIMEOUT,
+	MSG_RECEIVE_TIMEOUT,
+	SEND_TIMEOUT,
+	TIMEOUT_INCREASE_FACTOR,
+)
 from livetypes import (
 	CallFlag,
 	HPBSettings,
 	ReconnectMethod,
 	SigConnectResult,
 	SpreedRateLimitedException,
+	SupportedTranslationLanguages,
 	Target,
 	Transcript,
+	TranscriptTargetNotFoundException,
+	TranslateInputOutput,
+	TranslateLangPairException,
 	VoskException,
 )
+from meta_translator import MetaTranslator
 from models import LANGUAGE_MAP
 from nc_py_api import NextcloudApp
 from transcriber import VoskTranscriber
@@ -73,6 +86,18 @@ class SpreedClient:
 		self._close_task: asyncio.Task | None = None
 		self._deferred_close_task: asyncio.Task | None = None
 		self._reconnect_task: asyncio.Task | None = None
+		# todo: asyncio queue?
+		self.translate_queue_input: asyncio.Queue = asyncio.Queue()
+		self.translate_queue_output: asyncio.Queue = asyncio.Queue()
+		self.translated_text_sender: asyncio.Task | None = None
+		self.should_translate = threading.Event()  # set if at least one target has translation enabled
+		self.meta_translator = MetaTranslator(
+			room_token,
+			lang_id,
+			self.translate_queue_input,
+			self.translate_queue_output,
+			self.should_translate,
+		)
 
 		self.resumeid = None
 		self.sessionid = None
@@ -84,7 +109,7 @@ class SpreedClient:
 
 		self.room_token = room_token
 		self.hpb_settings = hpb_settings
-		self.lang_id = lang_id
+		self.lang_id = lang_id # todo: rename: room language
 		self.leave_call_cb = leave_call_cb
 
 
@@ -341,15 +366,29 @@ class SpreedClient:
 				return SigConnectResult.RETRY
 
 		self.defunct.clear()
-		self._monitor = asyncio.create_task(self.signalling_monitor())
+		self._monitor = asyncio.create_task(self.signalling_monitor(), name=f"signalling_monitor-{self.room_token}")
 
 		# just to be safe, start the transcript sender if not already running, even in reconnects
 		if self._transcript_sender is None or self._transcript_sender.done():
-			self._transcript_sender = asyncio.create_task(self.transcipt_queue_consumer())
+			self._transcript_sender = asyncio.create_task(
+				self.transcipt_queue_consumer(),
+				name=f"transcript_sender-{self.room_token}",
+			)
+
+		# just to be safe, start the translate sender if not already running, even in reconnects
+		# todo: or maybe only when requested?
+		if self.translated_text_sender is None or self.translated_text_sender.done():
+			self.translated_text_sender = asyncio.create_task(
+				self.translated_text_consumer(),
+				name=f"translated_text_sender-{self.room_token}",
+			)
 
 		if reconnect == ReconnectMethod.NO_RECONNECT:
 			# leave the call if there are no targets after some time
-			self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
+			self._deferred_close_task = asyncio.create_task(
+				self.maybe_leave_call(),
+				name=f"deferred_close-{self.room_token}",
+			)
 
 		await self.send_incall()
 		await self.send_join()
@@ -526,10 +565,42 @@ class SpreedClient:
 						"message": transcript.message,
 						"speakerSessionId": transcript.speaker_session_id,
 						"type": "transcript",
-					}
+					},
 				}
 			})
 			for sid in sids
+		]
+		await asyncio.gather(*send_tasks)
+
+	async def send_translated_text(self, segment: TranslateInputOutput):
+		send_tasks = [
+			self.send_message({
+				"type": "message",
+				"message": {
+					"recipient": {
+						"type": "session",
+						"sessionid": self.nc_sid_map[nc_sid],
+					},
+					# "data": {
+					# 	"originLanguage": segment.origin_language,
+					# 	"targetLanguage": segment.target_language,
+					# 	"message": segment.message,
+					# 	"speakerSessionId": segment.speaker_session_id,
+					# 	# todo: change to "translate"?
+					# 	"type": "transcript",
+					# },
+					"data": {
+						"langId": segment.target_language,
+						"message": segment.message,
+						"speakerSessionId": segment.speaker_session_id,
+						"final": True,
+						# todo: change to "translate"?
+						"type": "transcript",
+					},
+				}
+			})
+			for nc_sid in segment.target_nc_session_ids
+			if nc_sid in self.nc_sid_map
 		]
 		await asyncio.gather(*send_tasks)
 
@@ -607,6 +678,19 @@ class SpreedClient:
 				self._transcript_sender = None
 
 		with suppress(Exception):
+			self.should_translate.clear()
+			await self.meta_translator.shutdown()
+			# todo: for all queues, use join? Flush the queues and then cancel the tasks.
+			# self.translate_queue_input.shutdown()
+			if self.translated_text_sender and not self.translated_text_sender.done():
+				LOGGER.debug("Cancelling translated text sender task", extra={
+					"room_token": self.room_token,
+					"tag": "translate",
+				})
+				self.translated_text_sender.cancel()
+				self.translated_text_sender = None
+
+		with suppress(Exception):
 			if self._server and self._server.state == WsState.OPEN:
 				LOGGER.debug("Closing WebSocket connection", extra={
 					"room_token": self.room_token,
@@ -679,6 +763,11 @@ class SpreedClient:
 			if self._deferred_close_task:
 				self._deferred_close_task.cancel()
 				self._deferred_close_task = None
+
+	async def is_target(self, nc_session_id: str):
+		"""Check if the given Nextcloud session ID corresponds to an active transcript target."""
+		async with self.target_lock:
+			return nc_session_id in self.nc_sid_map or nc_session_id in self._nc_sid_wait_stash
 
 	async def remove_target(self, nc_session_id: str):
 		async with self.target_lock:
@@ -754,7 +843,10 @@ class SpreedClient:
 					"tag": "monitor",
 				})
 				if not self._reconnect_task or self._reconnect_task.done():
-					self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.SHORT_RESUME))
+					self._reconnect_task = asyncio.create_task(
+						self.connect(reconnect=ReconnectMethod.SHORT_RESUME),
+						name=f"close-{self.room_token}"
+					)
 				await asyncio.sleep(2)
 				continue
 			except asyncio.CancelledError:
@@ -763,7 +855,7 @@ class SpreedClient:
 					"tag": "monitor",
 				})
 				if not self._close_task:
-					self._close_task = asyncio.create_task(self.close())
+					self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 				raise
 			except Exception as e:
 				LOGGER.exception("Unexpected error in signalling monitor", exc_info=e, extra={
@@ -771,7 +863,7 @@ class SpreedClient:
 					"tag": "monitor",
 				})
 				if not self._close_task:
-					self._close_task = asyncio.create_task(self.close())
+					self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 				break
 
 			if message.get("type") == "error":
@@ -792,7 +884,7 @@ class SpreedClient:
 
 				# only close if the error is not recoverable
 				if not self._close_task:
-					self._close_task = asyncio.create_task(self.close())
+					self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 				return
 
 			if (
@@ -813,7 +905,7 @@ class SpreedClient:
 						"tag": "participants",
 					})
 					if not self._close_task:
-						self._close_task = asyncio.create_task(self.close())
+						self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 					return
 
 				users_update = message["event"]["update"].get("users", [])
@@ -847,6 +939,8 @@ class SpreedClient:
 						# not sure why a KeyError is hit when the monitor task is cancelled,
 						# adding a guard to prevent error logs
 						if "nextcloudSessionId" in user_desc:
+							# todo: get the userid for the session ids and maintain a map in "sid_translation_lang_map"
+							# todo: use the ownerId of the room for the OCP translations, using talk api, or something.
 							self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
 
 					# if this is one of the deferred targets, add it to the targets
@@ -904,7 +998,7 @@ class SpreedClient:
 							"tag": "participants",
 						})
 						if not self._close_task:
-							self._close_task = asyncio.create_task(self.close())
+							self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 						return
 
 			if message["type"] == "message" and message["message"]["data"]["type"] == "offer":
@@ -939,7 +1033,7 @@ class SpreedClient:
 					"tag": "bye",
 				})
 				if not self._close_task:
-					self._close_task = asyncio.create_task(self.close())
+					self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 
 	async def maybe_leave_call(self):
 		"""Leave the call if there are no targets."""
@@ -965,7 +1059,7 @@ class SpreedClient:
 				"tag": "maybe_leave_call",
 			})
 			if not self._close_task:
-				self._close_task = asyncio.create_task(self.close())
+				self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 		self._deferred_close_task = None
 
 	async def handle_offer(self, message):  # noqa: C901
@@ -1032,7 +1126,13 @@ class SpreedClient:
 				})
 				stream = AudioStream(track)
 				async with self.transcriber_lock:
-					self.transcribers[spkr_sid] = VoskTranscriber(spkr_sid, self.lang_id, self.transcript_queue)
+					self.transcribers[spkr_sid] = VoskTranscriber(
+						spkr_sid,
+						self.lang_id,
+						self.transcript_queue,
+						self.should_translate,
+						self.translate_queue_input,
+					)
 
 					try:
 						await self.transcribers[spkr_sid].connect()
@@ -1047,7 +1147,7 @@ class SpreedClient:
 							},
 						)
 						if not self._close_task:
-							self._close_task = asyncio.create_task(self.close())
+							self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 						return
 
 					LOGGER.debug("Started transcriber for %s in %s", spkr_sid, LANGUAGE_MAP.get(self.lang_id).name,
@@ -1121,6 +1221,8 @@ class SpreedClient:
 			"room_token": self.room_token,
 			"tag": "transcript",
 		})
+		timeout = SEND_TIMEOUT
+		timeout_count = 0
 		while True:
 			if self.defunct.is_set():
 				LOGGER.debug("SpreedClient is defunct, waiting before sending transcripts", extra={
@@ -1135,14 +1237,47 @@ class SpreedClient:
 			try:
 				await asyncio.wait_for(
 					self.send_transcript(transcript),
-					timeout=10,
+					timeout=timeout,
 				)
+				timeout_count -= 1 if timeout_count > 0 else 0
+				if timeout_count == 0 and timeout > SEND_TIMEOUT:
+					timeout = max(SEND_TIMEOUT, int(timeout / TIMEOUT_INCREASE_FACTOR))
+					LOGGER.debug("Decreased transcript send timeout to %d seconds", timeout, extra={
+						"speaker_session_id": transcript.speaker_session_id,
+						"room_token": self.room_token,
+						"tag": "translate",
+					})
 			except TimeoutError:
 				LOGGER.error("Timeout while sending a transcript", extra={
 					"speaker_session_id": transcript.speaker_session_id,
 					"room_token": self.room_token,
 					"tag": "transcript",
 				})
+
+				if timeout > MAX_TRANSCRIPT_SEND_TIMEOUT:
+					LOGGER.warning("Transcription timeout too high (%d seconds), not increasing further",
+						timeout,
+						extra={
+						"speaker_session_id": transcript.speaker_session_id,
+						"room_token": self.room_token,
+						"tag": "translate",
+						},
+					)
+					continue
+
+				timeout_count += 1
+				if timeout_count >= 5:
+					timeout = int(timeout * TIMEOUT_INCREASE_FACTOR)
+					LOGGER.error("Multiple timeouts while sending transcripts, increasing to %d", timeout, extra={
+						"origin_language": transcript.origin_language,
+						"target_language": transcript.target_language,
+						"speaker_session_id": transcript.speaker_session_id,
+						"room_token": self.room_token,
+						"tag": "translate",
+					})
+					timeout_count = 0
+				continue
+
 				continue
 			except asyncio.CancelledError:
 				LOGGER.debug("Transcript consumer task cancelled", extra={
@@ -1155,5 +1290,137 @@ class SpreedClient:
 					"speaker_session_id": transcript.speaker_session_id,
 					"room_token": self.room_token,
 					"tag": "transcript",
+				})
+				continue
+
+	async def get_translation_languages(self) -> SupportedTranslationLanguages:
+		return await self.meta_translator.get_translation_languages()
+
+	async def set_target_language(self, nc_session_id: str, target_lang_id: str):
+		"""
+		Raises
+		------
+			TranslateFatalException: If a fatal error occurs and all translators should be removed
+			TranslateLangPairException: If the language pair is not supported
+			TranslateException: If any other translation error occurs
+			TranscriptTargetNotFoundException: If the transcript target is not found
+		"""  # noqa
+
+		if target_lang_id == self.lang_id:
+			LOGGER.debug("Target language is the same as the original language, doing nothing", extra={
+				"nc_session_id": nc_session_id,
+				"target_lang_id": target_lang_id,
+				"original_lang_id": self.lang_id,
+				"room_token": self.room_token,
+				"tag": "translate",
+			})
+			raise TranslateLangPairException(
+				f"Target language '{target_lang_id}' is the same as the original language '{self.lang_id}'",
+			)
+
+		if not self.is_target(nc_session_id) and not await self.meta_translator.is_translation_target(nc_session_id):
+			raise TranscriptTargetNotFoundException(
+				f"Transcript target with Nextcloud session ID '{nc_session_id}' not found."
+				" Transcription must be enabled for the target before setting the translation language.",
+			)
+
+		if not self.meta_translator.is_target_lang_supported(target_lang_id):
+			raise TranslateLangPairException(
+				f"Target language '{target_lang_id}' is not supported",
+			)
+
+		await self.meta_translator.add_translator(target_lang_id, nc_session_id)
+		# prevent original language transcripts from being sent to this target
+		await self.remove_target(nc_session_id)
+
+	async def remove_translation(self, nc_session_id: str):
+		await self.meta_translator.remove_translator(nc_session_id)
+		# add the target back to receive original language transcripts
+		await self.add_target(nc_session_id)
+
+	async def translated_text_consumer(self):
+		"""Consume translated text segments from the queue and send them to the server."""
+		LOGGER.debug("Starting the translated text queue consumer", extra={
+			"room_token": self.room_token,
+			"tag": "translate",
+		})
+		timeout = SEND_TIMEOUT
+		timeout_count = 0
+		while True:
+			segment: TranslateInputOutput = await self.translate_queue_output.get()  # type: ignore[annotation-unchecked]
+
+			# todo
+			LOGGER.debug("Got translated text segment from the output queue", extra={
+				"origin_language": segment.origin_language,
+				"target_language": segment.target_language,
+				"speaker_session_id": segment.speaker_session_id,
+				"target_nc_session_ids": segment.target_nc_session_ids,
+				"segment_message": segment.message,
+				"room_token": self.room_token,
+				"tag": "translate",
+			})
+
+			try:
+				await asyncio.wait_for(
+					self.send_translated_text(segment),
+					timeout=timeout,
+				)
+				timeout_count -= 1 if timeout_count > 0 else 0
+				if timeout_count == 0 and timeout > SEND_TIMEOUT:
+					timeout = max(SEND_TIMEOUT, int(timeout / TIMEOUT_INCREASE_FACTOR))
+					LOGGER.debug("Decreased translated text send timeout to %d seconds", timeout, extra={
+						"origin_language": segment.origin_language,
+						"target_language": segment.target_language,
+						"speaker_session_id": segment.speaker_session_id,
+						"room_token": self.room_token,
+						"tag": "translate",
+					})
+			except TimeoutError:
+				LOGGER.debug("Timeout while sending a translated text", extra={
+					"origin_language": segment.origin_language,
+					"target_language": segment.target_language,
+					"speaker_session_id": segment.speaker_session_id,
+					"room_token": self.room_token,
+					"tag": "translate",
+				})
+
+				if timeout > MAX_TRANSLATION_SEND_TIMEOUT:
+					LOGGER.warning("Translation timeout too high (%d seconds), not increasing further", timeout, extra={
+						"origin_language": segment.origin_language,
+						"target_language": segment.target_language,
+						"speaker_session_id": segment.speaker_session_id,
+						"room_token": self.room_token,
+						"tag": "translate",
+					})
+					continue
+
+				timeout_count += 1
+				if timeout_count >= 5:
+					timeout = int(timeout * TIMEOUT_INCREASE_FACTOR)
+					LOGGER.error("Multiple timeouts while sending translated texts, increasing to %d", timeout, extra={
+						"origin_language": segment.origin_language,
+						"target_language": segment.target_language,
+						"speaker_session_id": segment.speaker_session_id,
+						"room_token": self.room_token,
+						"tag": "translate",
+					})
+					timeout_count = 0
+				continue
+
+			except asyncio.CancelledError:
+				LOGGER.debug("Translated text consumer task cancelled", extra={
+					"origin_language": segment.origin_language,
+					"target_language": segment.target_language,
+					"room_token": self.room_token,
+					"tag": "translate",
+				})
+				raise
+			except Exception as e:
+				LOGGER.exception("Error while sending a translated text", exc_info=e, extra={
+					"origin_language": segment.origin_language,
+					"target_language": segment.target_language,
+					"speaker_session_id": segment.speaker_session_id,
+					"room_token": self.room_token,
+					"tag": "translate",
 				})
 				continue
