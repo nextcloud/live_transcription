@@ -368,6 +368,12 @@ class MetaTranslator:
 		return await tmp_translator.is_language_pair_supported()
 
 	async def get_translation_languages(self) -> SupportedTranslationLanguages:
+		"""
+		Raises
+		------
+			TranslateFatalException
+			TranslateException
+		"""  # noqa
 		if self.__translation_languages_cache:
 			cached_time, cached_langs = self.__translation_languages_cache
 			if (time() - cached_time) < CACHE_TRANSLATION_LANGS_FOR:

@@ -212,6 +212,12 @@ class OCPTranslator(ATranslator):
 		return task.output["output"]
 
 	async def __get_task_types(self) -> TaskTypesResponse:
+		"""
+		Raises
+		------
+			TranslateFatalException
+			TranslateException
+		"""  # noqa
 		nc = AsyncNextcloudApp()
 		await nc.set_user(self.room_owner_id)
 

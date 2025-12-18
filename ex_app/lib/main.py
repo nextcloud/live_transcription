@@ -32,6 +32,7 @@ if __skip_cert_verify in ("true", "1"):
 # isort: on
 
 import uvicorn
+from caps import get_supported_translation_languages
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
@@ -129,6 +130,7 @@ async def set_call_language(req: RoomLanguageSetRequest):
 )
 async def get_translation_languages(roomToken: str) -> SupportedTranslationLanguages | JSONResponse:
 	try:
+		# todo: convert this to the caps way of fetching supported translation languages?
 		return await SERVICE.get_translation_languages(roomToken)
 	except SpreedClientException as e:
 		return JSONResponse(status_code=404, content={"error": str(e)})
@@ -211,16 +213,28 @@ APP.include_router(ROUTER_V1)
 
 # until capabilities is supported in nc_py_api
 @APP.get("/capabilities")
-async def get_capabilities():
+async def get_capabilities() -> dict[str, dict]:
+	try:
+		supported_translation_languages = await get_supported_translation_languages()
+	except Exception as e:
+		LOGGER.exception("Failed to get supported translation languages for capabilities", exc_info=e)
+		supported_translation_languages = None
+
 	return {
 		f"{os.environ['APP_ID']}": {
 			"version": f"{os.environ['APP_VERSION']}",
 			"features": [
 				"live_transcription",
+				*(["live_translation"] if supported_translation_languages else []),
 			],
 			"live_transcription": {
 				"supported_languages": VOSK_SUPPORTED_LANGUAGE_MAP,
 			},
+			**({
+				"live_translation": {
+					"supported_translation_languages": supported_translation_languages,
+				},
+			} if supported_translation_languages else {}),
 		}
 	}
 
