@@ -47,11 +47,10 @@ LOGGER = logging.getLogger("lt")
 SERVICE: Application
 ENABLED = Event()
 MODELS_TO_FETCH = {
-	# todo: some huggingface_hub/tqdm error
-	# "Nextcloud-AI/vosk-models": {
-	# 	"local_dir": persistent_storage(),
-	# 	"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
-	# }
+	"Nextcloud-AI/vosk-models": {
+		"local_dir": persistent_storage(),
+		"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
+	}
 }
 # todo: declarative settings for language override and model download
 
