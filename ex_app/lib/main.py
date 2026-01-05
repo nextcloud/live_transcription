@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from threading import Event
 
+import urllib3
+
 # isort: off
 from livetypes import (
 	LanguageModel,
@@ -29,6 +31,7 @@ load_dotenv()
 __skip_cert_verify = os.environ.get("SKIP_CERT_VERIFY", "false").lower()
 if __skip_cert_verify in ("true", "1"):
 	os.environ["NPA_NC_CERT"] = "false"
+	urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # isort: on
 
 import uvicorn
