@@ -65,7 +65,7 @@ class SpreedClient:
 		self,
 		room_token: str,
 		hpb_settings: HPBSettings,
-		lang_id: str,
+		room_lang_id: str,
 		leave_call_cb: Callable[[str], Awaitable[None]],  # room_token
 	) -> None:
 		self.id = 0
@@ -86,14 +86,13 @@ class SpreedClient:
 		self._close_task: asyncio.Task | None = None
 		self._deferred_close_task: asyncio.Task | None = None
 		self._reconnect_task: asyncio.Task | None = None
-		# todo: asyncio queue?
 		self.translate_queue_input: asyncio.Queue = asyncio.Queue()
 		self.translate_queue_output: asyncio.Queue = asyncio.Queue()
 		self.translated_text_sender: asyncio.Task | None = None
 		self.should_translate = threading.Event()  # set if at least one target has translation enabled
 		self.meta_translator = MetaTranslator(
 			room_token,
-			lang_id,
+			room_lang_id,
 			self.translate_queue_input,
 			self.translate_queue_output,
 			self.should_translate,
@@ -109,7 +108,7 @@ class SpreedClient:
 
 		self.room_token = room_token
 		self.hpb_settings = hpb_settings
-		self.lang_id = lang_id # todo: rename: room language
+		self.room_lang_id = room_lang_id
 		self.leave_call_cb = leave_call_cb
 
 
@@ -747,7 +746,7 @@ class SpreedClient:
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
-					"lang_id": self.lang_id,
+					"room_lang_id": self.room_lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -756,7 +755,7 @@ class SpreedClient:
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
-					"lang_id": self.lang_id,
+					"room_lang_id": self.room_lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -789,7 +788,7 @@ class SpreedClient:
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
-					"lang_id": self.lang_id,
+					"room_lang_id": self.room_lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -803,7 +802,7 @@ class SpreedClient:
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
-					"lang_id": self.lang_id,
+					"room_lang_id": self.room_lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -814,7 +813,7 @@ class SpreedClient:
 				LOGGER.debug("Removed target", extra={
 					"session_id": session_id,
 					"targets": self.targets,
-					"lang_id": self.lang_id,
+					"room_lang_id": self.room_lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -827,7 +826,7 @@ class SpreedClient:
 				LOGGER.debug("Target does not exist", extra={
 					"session_id": session_id,
 					"targets": self.targets,
-					"lang_id": self.lang_id,
+					"room_lang_id": self.room_lang_id,
 					"room_token": self.room_token,
 					"tag": "target",
 				})
@@ -1128,7 +1127,7 @@ class SpreedClient:
 				async with self.transcriber_lock:
 					self.transcribers[spkr_sid] = VoskTranscriber(
 						spkr_sid,
-						self.lang_id,
+						self.room_lang_id,
 						self.transcript_queue,
 						self.should_translate,
 						self.translate_queue_input,
@@ -1150,10 +1149,10 @@ class SpreedClient:
 							self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 						return
 
-					LOGGER.debug("Started transcriber for %s in %s", spkr_sid, LANGUAGE_MAP.get(self.lang_id).name,
+					LOGGER.debug("Started transcriber for %s in %s", spkr_sid, LANGUAGE_MAP.get(self.room_lang_id).name,
 						extra={
 							"session_id": spkr_sid,
-							"language": self.lang_id,
+							"room_lang_id": self.room_lang_id,
 							"room_token": self.room_token,
 							"tag": "transcriber",
 						},
@@ -1213,7 +1212,7 @@ class SpreedClient:
 			)
 		if len(excs) == 1:
 			raise VoskException(f"Failed to set language for one transcriber: {excs[0]}", retcode=500)
-		self.lang_id = lang_id
+		self.room_lang_id = lang_id
 
 	async def transcipt_queue_consumer(self):
 		"""Consume transcripts from the queue and send them to the server."""
@@ -1306,16 +1305,16 @@ class SpreedClient:
 			TranscriptTargetNotFoundException: If the transcript target is not found
 		"""  # noqa
 
-		if target_lang_id == self.lang_id:
+		if target_lang_id == self.room_lang_id:
 			LOGGER.debug("Target language is the same as the original language, doing nothing", extra={
 				"nc_session_id": nc_session_id,
 				"target_lang_id": target_lang_id,
-				"original_lang_id": self.lang_id,
+				"original_lang_id": self.room_lang_id,
 				"room_token": self.room_token,
 				"tag": "translate",
 			})
 			raise TranslateLangPairException(
-				f"Target language '{target_lang_id}' is the same as the original language '{self.lang_id}'",
+				f"Target language '{target_lang_id}' is the same as the original language '{self.room_lang_id}'",
 			)
 
 		if not self.is_target(nc_session_id) and not await self.meta_translator.is_translation_target(nc_session_id):
