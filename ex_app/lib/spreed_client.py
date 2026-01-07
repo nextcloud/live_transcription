@@ -375,7 +375,6 @@ class SpreedClient:
 			)
 
 		# just to be safe, start the translate sender if not already running, even in reconnects
-		# todo: or maybe only when requested?
 		if self.translated_text_sender is None or self.translated_text_sender.done():
 			self.translated_text_sender = asyncio.create_task(
 				self.translated_text_consumer(),
@@ -1347,17 +1346,6 @@ class SpreedClient:
 		timeout_count = 0
 		while True:
 			segment: TranslateInputOutput = await self.translate_queue_output.get()  # type: ignore[annotation-unchecked]
-
-			# todo
-			LOGGER.debug("Got translated text segment from the output queue", extra={
-				"origin_language": segment.origin_language,
-				"target_language": segment.target_language,
-				"speaker_session_id": segment.speaker_session_id,
-				"target_nc_session_ids": segment.target_nc_session_ids,
-				"segment_message": segment.message,
-				"room_token": self.room_token,
-				"tag": "translate",
-			})
 
 			try:
 				await asyncio.wait_for(

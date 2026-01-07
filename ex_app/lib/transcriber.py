@@ -227,13 +227,6 @@ class VoskTranscriber:
 				last_sent = perf_counter()
 
 				if is_final and self.__should_translate.is_set():
-					# todo
-					LOGGER.debug("Queuing message for translation", extra={
-						"origin_language": self.__language,
-						"transcript": message,
-						"session_id": self.__session_id,
-						"tag": "translate",
-					})
 					self.__translate_queue_input.put_nowait(TranslateInputOutput(
 						origin_language=self.__language,
 						target_language="",  # to be filled by MetaTranslator

@@ -175,7 +175,6 @@ class Application:
 		------
 			SpreedClientException: If no SpreedClient exists for the given room token
 		"""  # noqa
-		# todo: re-check all locks if they're asyncio
 		async with self.spreed_clients_lock:
 			if req.roomToken not in self.spreed_clients:
 				raise SpreedClientException(
