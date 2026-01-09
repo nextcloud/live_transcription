@@ -111,6 +111,10 @@ class MetaTranslator:
 		async with self.sid_translation_lang_map_lock:
 			return nc_session_id in self.sid_translation_lang_map
 
+	async def is_translating(self) -> bool:
+		async with self.sid_translation_lang_map_lock:
+			return bool(self.sid_translation_lang_map)
+
 	async def __remove_translator_int(self, target_lang_id: str, nc_session_id: str):
 		async with self.translators_lock:
 			if target_lang_id not in self.translators:

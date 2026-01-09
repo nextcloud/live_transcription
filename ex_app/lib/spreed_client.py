@@ -1051,11 +1051,17 @@ class SpreedClient:
 
 		async with self.target_lock:
 			len_targets = len(self.targets)
-		if len_targets == 0:
-			LOGGER.debug("No transcript receivers for %s secs, leaving the call", CALL_LEAVE_TIMEOUT, extra={
-				"room_token": self.room_token,
-				"tag": "maybe_leave_call",
-			})
+		if (
+			len_targets == 0
+			and not (self.should_translate.is_set() and await self.meta_translator.is_translating())
+		):
+			LOGGER.warning("No transcript/translation receivers for %s secs, leaving the call",
+				CALL_LEAVE_TIMEOUT,
+				extra={
+					"room_token": self.room_token,
+					"tag": "maybe_leave_call",
+				}
+			)
 			if not self._close_task:
 				self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 		self._deferred_close_task = None
