@@ -220,7 +220,7 @@ class Application:
 		async with self.spreed_clients_lock:
 			spreed_client = self.spreed_clients[req.roomToken]
 			if req.langId is None:
-				await spreed_client.remove_translation(req.ncSessionId)
+				await spreed_client.remove_translation(req.ncSessionId, add_target_back=True)
 				return
 			await spreed_client.set_target_language(req.ncSessionId, req.langId)
 

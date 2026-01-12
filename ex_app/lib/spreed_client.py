@@ -1338,10 +1338,11 @@ class SpreedClient:
 		# prevent original language transcripts from being sent to this target
 		await self.remove_target(nc_session_id)
 
-	async def remove_translation(self, nc_session_id: str):
+	async def remove_translation(self, nc_session_id: str, add_target_back: bool = False):
 		await self.meta_translator.remove_translator(nc_session_id)
-		# add the target back to receive original language transcripts
-		await self.add_target(nc_session_id)
+		if add_target_back:
+			# add the target back to receive original language transcripts
+			await self.add_target(nc_session_id)
 
 	async def translated_text_consumer(self):
 		"""Consume translated text segments from the queue and send them to the server."""
