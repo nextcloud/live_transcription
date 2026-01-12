@@ -86,10 +86,7 @@ class MetaTranslator:
 					"nc_session_id": nc_session_id,
 					"tag": "translate",
 				})
-				# todo: room owner id from talk api
-				self.translators[target_lang_id] = OCPTranslator(
-					self.room_lang_id, target_lang_id, self.room_token, "admin"
-				)
+				self.translators[target_lang_id] = OCPTranslator(self.room_lang_id, target_lang_id, self.room_token)
 				try:
 					await self.translators[target_lang_id].is_language_pair_supported()
 				except TranslateException:
@@ -367,8 +364,7 @@ class MetaTranslator:
 			})
 
 	async def is_target_lang_supported(self, target_lang_id: str) -> bool:
-		# todo: room owner id from talk api
-		tmp_translator = OCPTranslator(self.room_lang_id, target_lang_id, self.room_token, "admin")
+		tmp_translator = OCPTranslator(self.room_lang_id, target_lang_id, self.room_token)
 		return await tmp_translator.is_language_pair_supported()
 
 	async def get_translation_languages(self) -> SupportedTranslationLanguages:
@@ -383,9 +379,8 @@ class MetaTranslator:
 			if (time() - cached_time) < CACHE_TRANSLATION_LANGS_FOR:
 				return cached_langs
 
-		# todo: room owner id from talk api
 		# use any target lang id, e.g. english
-		tmp_translator = OCPTranslator(self.room_lang_id, "en", self.room_token, "admin")
+		tmp_translator = OCPTranslator(self.room_lang_id, "en", self.room_token)
 		langs = await tmp_translator.get_translation_languages()
 		self.__translation_languages_cache = (time(), langs)
 		return langs

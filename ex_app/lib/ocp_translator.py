@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 
+import asyncio
 import logging
 import os
 import time
@@ -83,16 +84,14 @@ class TaskTypesResponse(BaseModel):
 
 
 class OCPTranslator(ATranslator):
-	def __init__(self, origin_language: str, target_language: str, room_token: str, room_owner_id: str):
+	def __init__(self, origin_language: str, target_language: str, room_token: str):
 		super().__init__(origin_language, target_language, room_token)
-		self.room_owner_id = room_owner_id
 
 		self.__ocp_origin_lang_id = origin_language
 		self.__task_types_cache: tuple[float, TaskTypesResponse] | None = None
 
 	async def translate(self, message: str) -> str:  # noqa: C901
 		nc = AsyncNextcloudApp()
-		await nc.set_user(self.room_owner_id)
 
 		sched_tries = OCP_TASK_PROC_SCHED_RETRIES
 		while True:
@@ -104,7 +103,7 @@ class OCPTranslator(ATranslator):
 				# todo: webhook callback instead of polling
 				response = await nc.ocs(
 					"POST",
-					"/ocs/v2.php/taskprocessing/schedule",
+					"/ocs/v2.php/taskprocessing/tasks_consumer/schedule",
 					json={
 						"type": TRANSLATE_TASK_TYPE,
 						"appId": os.getenv("APP_ID", "live_transcription"),
@@ -133,7 +132,7 @@ class OCPTranslator(ATranslator):
 						"tries_left": sched_tries,
 						"tag": "translate",
 					})
-					time.sleep(30)
+					await asyncio.sleep(30)
 					continue
 
 				LOGGER.error("NextcloudException during task scheduling", exc_info=e, extra={
@@ -160,15 +159,15 @@ class OCPTranslator(ATranslator):
 			# wait for 30 minutes
 			while task.status != "STATUS_SUCCESSFUL" and task.status != "STATUS_FAILED" and i < 60 * 6:
 				if i < 60 * 3:
-					time.sleep(5)
+					await asyncio.sleep(5)
 					i += 1
 				else:
 					# pool every 10 secs in the second half
-					time.sleep(10)
+					await asyncio.sleep(10)
 					i += 2
 
 				try:
-					response = await nc.ocs("GET", f"/ocs/v1.php/taskprocessing/task/{task.id}")
+					response = await nc.ocs("GET", f"/ocs/v1.php/taskprocessing/tasks_consumer/task/{task.id}")
 				except NextcloudException as e:
 					if e.status_code == niquests.codes.too_many_requests:  # type: ignore[attr-defined]
 						LOGGER.warning("Rate limited during task polling, waiting 10s before retrying", extra={
@@ -177,7 +176,7 @@ class OCPTranslator(ATranslator):
 							"tries_so_far": i,
 							"tag": "translate",
 						})
-						time.sleep(10)
+						await asyncio.sleep(10)
 						i += 2
 						continue
 					raise TranslateException("Failed to poll Nextcloud TaskProcessing task") from e
@@ -188,7 +187,7 @@ class OCPTranslator(ATranslator):
 						"tries_so_far": i,
 						"tag": "translate",
 					})
-					time.sleep(5)
+					await asyncio.sleep(5)
 					i += 1
 					continue
 
@@ -219,7 +218,6 @@ class OCPTranslator(ATranslator):
 			TranslateException
 		"""  # noqa
 		nc = AsyncNextcloudApp()
-		await nc.set_user(self.room_owner_id)
 
 		if self.__task_types_cache:
 			cached_time, cached_ttypes = self.__task_types_cache
@@ -229,7 +227,7 @@ class OCPTranslator(ATranslator):
 		try:
 			response = await nc.ocs(
 				"GET",
-				"/ocs/v2.php/taskprocessing/tasktypes",
+				"/ocs/v2.php/taskprocessing/tasks_consumer/tasktypes",
 			)
 		except NextcloudException as e:
 			raise TranslateFatalException("Failed to fetch Nextcloud TaskProcessing types") from e

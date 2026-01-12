@@ -21,6 +21,7 @@ from audio_stream import AudioStream
 from constants import (
 	CALL_LEAVE_TIMEOUT,
 	HPB_PING_TIMEOUT,
+	HPB_SHUTDOWN_TIMEOUT,
 	MAX_TRANSCRIPT_SEND_TIMEOUT,
 	MAX_TRANSLATION_SEND_TIMEOUT,
 	MSG_RECEIVE_TIMEOUT,
@@ -262,7 +263,7 @@ class SpreedClient:
 				"tag": "connection",
 			})
 			try:
-				await asyncio.wait_for(self.close(), CALL_LEAVE_TIMEOUT)
+				await asyncio.wait_for(self.close(), HPB_SHUTDOWN_TIMEOUT)
 			except TimeoutError:
 				LOGGER.warning("Timeout while closing SpreedClient during full reconnect, proceeding anyway", extra={
 					"room_token": self.room_token,
