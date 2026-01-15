@@ -19,7 +19,7 @@ from livetypes import (
 	TranslateFatalException,
 	TranslateLangPairException,
 )
-from models import VOSK_SUPPORTED_LANGUAGE_MAP
+from models import LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp, NextcloudException
 from pydantic import BaseModel, ValidationError
 
@@ -292,7 +292,7 @@ class OCPTranslator(ATranslator):
 			)
 		return True
 
-	# todo: make staticmethod, maybe cache result globally
+	# todo: make staticmethod, maybe cache result or leave it in the meta_translator
 	async def get_translation_languages(self) -> SupportedTranslationLanguages:
 		"""
 		Raises
@@ -302,12 +302,14 @@ class OCPTranslator(ATranslator):
 		"""  # noqa
 		task_types = await self.__get_task_types()
 		olangs = {
-			olang.value: VOSK_SUPPORTED_LANGUAGE_MAP.get(olang.value, LanguageModel(name=olang.value))
+			olang.value: LANGUAGE_MAP.get(olang.value, LanguageModel(name=olang.name or olang.value))
 			for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]
+			if olang.value
 		}
 		tlangs = {
-			tlang.value: VOSK_SUPPORTED_LANGUAGE_MAP.get(tlang.value, LanguageModel(name=tlang.value))
+			tlang.value: LANGUAGE_MAP.get(tlang.value, LanguageModel(name=tlang.name or tlang.value))
 			for tlang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["target_language"]
+			if tlang.value
 		}
 		return SupportedTranslationLanguages(
 			origin_languages=olangs,
