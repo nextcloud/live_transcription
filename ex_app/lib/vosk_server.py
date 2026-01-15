@@ -149,6 +149,10 @@ async def recognize(websocket: ws.ServerConnection):  # noqa: C901
 				logging.info("Stream finished for %s", websocket.remote_address)
 				await maybe_release_model(lang)
 				break
+		except ws.exceptions.ConnectionClosedOK:
+			logging.info("Connection closed normally by client: %s", websocket.remote_address)
+			await maybe_release_model(lang)
+			break
 		except ws.exceptions.WebSocketException as e:
 			logging.error("WebSocket error, closing this connection and cleaning up: %s", e)
 			await maybe_release_model(lang)
