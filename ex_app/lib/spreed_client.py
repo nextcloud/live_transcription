@@ -1301,14 +1301,14 @@ class SpreedClient:
 	async def get_translation_languages(self) -> SupportedTranslationLanguages:
 		return await self.meta_translator.get_translation_languages()
 
-	async def set_target_language(self, nc_session_id: str, target_lang_id: str):
+	async def set_target_language(self, nc_session_id: str, target_lang_id: str, new_call: bool = False):
 		"""
 		Raises
 		------
 			TranslateFatalException: If a fatal error occurs and all translators should be removed
 			TranslateLangPairException: If the language pair is not supported
 			TranslateException: If any other translation error occurs
-			TranscriptTargetNotFoundException: If the transcript target is not found
+			TranscriptTargetNotFoundException: If the transcript target is not found and new_call is False
 		"""  # noqa
 
 		if target_lang_id == self.room_lang_id:
@@ -1323,13 +1323,17 @@ class SpreedClient:
 				f"Target language '{target_lang_id}' is the same as the original language '{self.room_lang_id}'",
 			)
 
-		if not self.is_target(nc_session_id) and not await self.meta_translator.is_translation_target(nc_session_id):
+		if (
+			not new_call
+			and not await self.is_target(nc_session_id)
+			and not await self.meta_translator.is_translation_target(nc_session_id)
+		):
 			raise TranscriptTargetNotFoundException(
 				f"Transcript target with Nextcloud session ID '{nc_session_id}' not found."
 				" Transcription must be enabled for the target before setting the translation language.",
 			)
 
-		if not self.meta_translator.is_target_lang_supported(target_lang_id):
+		if not await self.meta_translator.is_target_lang_supported(target_lang_id):
 			raise TranslateLangPairException(
 				f"Target language '{target_lang_id}' is not supported",
 			)

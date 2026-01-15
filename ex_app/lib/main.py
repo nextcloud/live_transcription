@@ -197,12 +197,53 @@ async def set_target_language(req: TargetLanguageSetRequest):
 
 @ROUTER_V1.post("/call/leave")
 async def leave_call(roomToken: str = Body(embed=True)):
-	await SERVICE.leave_call(roomToken)
+	try:
+		await SERVICE.leave_call(roomToken)
+	except Exception as e:
+		LOGGER.exception("Exception during leave_call", exc_info=e)
+		return JSONResponse(
+			status_code=500,
+			content={"error": "Failed to process leave call request."},
+		)
+	return JSONResponse(status_code=200, content={"message": "Leave call request processed."})
 
 
-@ROUTER_V1.post("/call/transcribe")
+@ROUTER_V1.post("/call/transcribe",
+	description=(
+		"Start transcription for a participant in a call."
+		" If translationTargetLangId is provided, translation will also be enabled for the participant."
+	),
+	responses={
+		200: {"description": "Transcription or translation request processed successfully."},
+		400: {"description": "Invalid, unsupported or same language ID provided as the room language for translation."},
+		503: {"description": "Failed to connect to the signaling server."},
+		550: {"description": (
+			"A fatal error occurred while processing the transcription or translation request."
+			" Do not retry any further attempts until the underlying issue is resolved."
+			" The transcription or translation provider may be not installed or misconfigured."
+			" See the logs for details."
+		)},
+	})
 async def transcribe_call(req: TranscribeRequest):
-	await SERVICE.transcript_req(req)
+	try:
+		await SERVICE.transcript_req(req)
+		return JSONResponse(
+			status_code=200,
+			content={"message": "Transcription or translation request processed successfully."},
+		)
+	except TranslateLangPairException as e:
+		return JSONResponse(status_code=400, content={"error": str(e)})
+	except TranslateFatalException as e:
+		LOGGER.warning("TranslateFatalException during transcribe_call", exc_info=e)
+		return JSONResponse(status_code=550, content={"error": str(e)})
+	except SpreedClientException as e:
+		return JSONResponse(status_code=503, content={"error": str(e)})
+	except Exception as e:
+		LOGGER.exception("Exception during transcribe_call", exc_info=e)
+		return JSONResponse(
+			status_code=500,
+			content={"error": "Failed to process transcription or translation request."},
+		)
 
 
 @ROUTER_V1.get("/languages")
