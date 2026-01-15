@@ -35,7 +35,7 @@ if __skip_cert_verify in ("true", "1"):
 # isort: on
 
 import uvicorn
-from caps import get_supported_translation_languages
+from capabilities import get_supported_translation_languages
 from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
