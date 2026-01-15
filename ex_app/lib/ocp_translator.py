@@ -290,6 +290,7 @@ class OCPTranslator(ATranslator):
 				f' "{self.target_language}".',
 			)
 
+	# todo: make staticmethod, maybe cache result globally
 	async def get_translation_languages(self) -> SupportedTranslationLanguages:
 		"""
 		Raises

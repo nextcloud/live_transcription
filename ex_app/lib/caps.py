@@ -2,11 +2,8 @@
 # SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-import asyncio
-import threading
-
 from livetypes import SupportedTranslationLanguages
-from meta_translator import MetaTranslator
+from ocp_translator import OCPTranslator
 
 
 # todo: this is a hacky way to get the supported translation languages
@@ -20,15 +17,10 @@ async def get_supported_translation_languages() -> SupportedTranslationLanguages
 		TranslateFatalException
 		TranslateException
 	"""  # noqa
-	dummy_q1: asyncio.Queue = asyncio.Queue()
-	dummy_q2: asyncio.Queue = asyncio.Queue()
-	dummy_event = threading.Event()
-
-	meta_translator = MetaTranslator(
-		room_token="",
-		room_lang_id="",
-		translate_queue_input=dummy_q1,
-		translate_queue_output=dummy_q2,
-		should_translate=dummy_event,
+	ocp_translator = OCPTranslator(
+		origin_language="en",
+		target_language="en",
+		room_token="languages-dummy",  # noqa: S106
 	)
-	return await meta_translator.get_translation_languages()
+	# todo: use the staticmethod version when implemented from "meta_translator.py"
+	return await ocp_translator.get_translation_languages()
