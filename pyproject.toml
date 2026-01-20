@@ -6,7 +6,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["A", "B", "C", "D", "E", "F", "G", "I", "S", "SIM", "PIE", "Q", "RET", "RUF", "UP" , "W"]
-extend-ignore = ["D100", "D101", "D102", "D103", "D105", "D107", "D203", "D213", "D401", "E402", "I001", "RUF100", "D400", "D415", "W191"]
+extend-ignore = ["D100", "D101", "D102", "D103", "D105", "D107", "D202", "D203", "D206", "D213", "D401", "E402", "I001", "RUF100", "D400", "D415", "W191"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 12
@@ -42,5 +42,5 @@ messages_control.disable = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["nc_py_api.*", "print_color.*", "vosk.*"]
+module = ["nc_py_api.*", "print_color.*", "vosk.*", "niquests.*"]
 follow_untyped_imports = true

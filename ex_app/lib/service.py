@@ -7,7 +7,16 @@ import asyncio
 import logging
 
 from constants import HPB_SHUTDOWN_TIMEOUT, MAX_CONNECT_TRIES
-from livetypes import LanguageSetRequest, SigConnectResult, SpreedClientException, TranscribeRequest
+from livetypes import (
+	RoomLanguageSetRequest,
+	SigConnectResult,
+	SpreedClientException,
+	SupportedTranslationLanguages,
+	TargetLanguageSetRequest,
+	TranscribeRequest,
+	TranscriptTargetNotFoundException,
+	TranslateException,
+)
 from spreed_client import SpreedClient
 from utils import get_hpb_settings
 
@@ -33,33 +42,48 @@ class Application:
 					break
 		await self.transcript_req(req, deferred=True)
 
-	async def transcript_req(self, req: TranscribeRequest, deferred: bool = False) -> None:
+	def __handle_transcript_req_defunct_client(self, req: TranscribeRequest) -> None:
+		if req.enable:
+			# defer start of a new client giving time for cleanup
+			LOGGER.info("SpreedClient for room token: %s is defunct, defering start of new client",
+				req.roomToken,
+				extra={
+					"room_token": req.roomToken,
+					"nc_session_id": req.ncSessionId,
+					"tag": "application",
+				},
+			)
+			task = asyncio.create_task(self.__defer_start_client(req))
+			self.__task_bin.add(task)
+			task.add_done_callback(self.__task_bin.discard)
+		else:
+			LOGGER.info("SpreedClient for room token: %s is already defunct,"
+				" ignoring request to disable %s",
+				req.roomToken,
+				"translation" if req.translationTargetLangId else "transcription",
+				extra={
+					"room_token": req.roomToken,
+					"nc_session_id": req.ncSessionId,
+					"tag": "application",
+				},
+			)
+		return
+
+	async def transcript_req(self, req: TranscribeRequest, deferred: bool = False) -> None: # noqa: C901
+		"""
+		Raises
+		------
+			TranslateFatalException: If a fatal error occurs and translation is not possible at all
+			TranslateLangPairException: If the language pair is not supported
+			TranslateException: If any other translation error occurs
+			asyncio.CancelledError: If the operation is cancelled
+			SpreedClientException: If connection to the signaling server fails
+		"""  # noqa
+
 		async with self.spreed_clients_lock:
 			if req.roomToken in self.spreed_clients:
 				if self.spreed_clients[req.roomToken].defunct.is_set():
-					if req.enable:
-						# defer start of a new client giving time for cleanup
-						LOGGER.info("SpreedClient for room token: %s is defunct, defering start of new client",
-							req.roomToken,
-							extra={
-								"room_token": req.roomToken,
-								"nc_session_id": req.ncSessionId,
-								"tag": "application",
-							},
-						)
-						task = asyncio.create_task(self.__defer_start_client(req))
-						self.__task_bin.add(task)
-						task.add_done_callback(self.__task_bin.discard)
-					else:
-						LOGGER.info("SpreedClient for room token: %s is already defunct,"
-							" ignoring request to disable transcription",
-							req.roomToken,
-							extra={
-								"room_token": req.roomToken,
-								"nc_session_id": req.ncSessionId,
-								"tag": "application",
-							},
-						)
+					self.__handle_transcript_req_defunct_client(req)
 					return
 
 				# already in a call with a valid client
@@ -73,15 +97,28 @@ class Application:
 							"tag": "application",
 						},
 					)
+					if req.translationTargetLangId:
+						# translation request in an existing call
+						await self.spreed_clients[req.roomToken].set_target_language(
+							req.ncSessionId,
+							req.translationTargetLangId,
+						)
+						return
+
+					# transcription request in an existing call
 					await self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
-				else:
-					await self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
+					return
+
+				# disable request in an existing call
+				await self.spreed_clients[req.roomToken].remove_target(req.ncSessionId)
+				await self.spreed_clients[req.roomToken].remove_translation(req.ncSessionId)
 				return
 
 		if not req.enable:
 			LOGGER.info(
-				"Received request to turn off transcription for room token: %s, "
+				"Received request to turn off %s for room token: %s, "
 				"NC session id: %s but no call is active. Ignoring request.",
+				"translation" if req.translationTargetLangId else "transcription",
 				req.roomToken, req.ncSessionId, extra={
 					"room_token": req.roomToken,
 					"nc_session_id": req.ncSessionId,
@@ -115,6 +152,13 @@ class Application:
 							"room_token": req.roomToken,
 							"tag": "connection",
 						})
+						if req.translationTargetLangId:
+							await self.spreed_clients[req.roomToken].set_target_language(
+								req.ncSessionId,
+								req.translationTargetLangId,
+								new_call=True,
+							)
+							return
 						await self.spreed_clients[req.roomToken].add_target(req.ncSessionId)
 						return
 					case SigConnectResult.FAILURE:
@@ -138,6 +182,11 @@ class Application:
 						)
 				tries -= 1
 				await asyncio.sleep(2)
+			except asyncio.CancelledError:
+				raise
+			except (TranslateException, TranscriptTargetNotFoundException):
+				# do not retry
+				raise
 			except Exception as e:
 				LOGGER.warning("Error connecting to signaling server", exc_info=e, extra={
 					"room_token": req.roomToken,
@@ -161,15 +210,60 @@ class Application:
 			f"Failed to connect to signaling server for room token {req.roomToken} after {MAX_CONNECT_TRIES} attempts"
 		) from last_exc
 
-	async def set_call_language(self, req: LanguageSetRequest) -> None:
+	async def set_call_language(self, req: RoomLanguageSetRequest) -> None:
+		"""
+		Raises
+		------
+			SpreedClientException: If no SpreedClient exists for the given room token
+		"""  # noqa
 		async with self.spreed_clients_lock:
 			if req.roomToken not in self.spreed_clients:
 				raise SpreedClientException(
-					f"No SpreedClient for room token {req.roomToken}, cannot set language"
+					f"No SpreedClient for room token {req.roomToken}, cannot set language."
+					" Start a call and add at least one participant first."
 				)
 
 			spreed_client = self.spreed_clients[req.roomToken]
 			await spreed_client.set_language(req.langId)
+
+	async def get_translation_languages(self, room_token: str) -> SupportedTranslationLanguages:
+		"""
+		Raises
+		------
+			SpreedClientException: If no SpreedClient exists for the given room token
+			TranslateFatalException: If a fatal error occurs and all translators should be removed
+			TranslateException: If any other translation error occurs
+		"""  # noqa
+		if room_token not in self.spreed_clients:
+			raise SpreedClientException(
+				f"No SpreedClient for room token {room_token}, cannot get supported origin and target languages."
+				" Start a call and add at least one participant first."
+			)
+		async with self.spreed_clients_lock:
+			spreed_client = self.spreed_clients[room_token]
+			return await spreed_client.get_translation_languages()
+
+	async def set_target_language(self, req: TargetLanguageSetRequest) -> None:
+		"""
+		Raises
+		------
+			SpreedClientException: If no SpreedClient exists for the given room token
+			TranslateFatalException: If a fatal error occurs and all translators should be removed
+			TranslateLangPairException: If the language pair is not supported
+			TranslateException: If any other translation error occurs
+			TranscriptTargetNotFoundException: If the transcript target is not found
+		"""  # noqa
+		if req.roomToken not in self.spreed_clients:
+			raise SpreedClientException(
+				f"No SpreedClient for room token {req.roomToken}, cannot set target language"
+			)
+
+		async with self.spreed_clients_lock:
+			spreed_client = self.spreed_clients[req.roomToken]
+			if req.langId is None:
+				await spreed_client.remove_translation(req.ncSessionId, add_target_back=True)
+				return
+			await spreed_client.set_target_language(req.ncSessionId, req.langId)
 
 	async def leave_call(self, room_token: str):
 		"""Leave the call for the given room token. Called from an API endpoint."""
