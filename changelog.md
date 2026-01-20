@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+## [2.0.0] - 2026-01-20
+
+### Breaking changes
+
+- Dropped support for NC < 33
+
+### New
+
+- feat: Live translation
 
 ## 1.3.0 - 2025-12-02
 
