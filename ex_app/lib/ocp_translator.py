@@ -289,6 +289,7 @@ class OCPTranslator(ATranslator):
 				"Nextcloud TaskProcessing text2text translate task type does not support translation to target language"
 				f' "{self.target_language}".',
 			)
+		return True
 
 	# todo: make staticmethod, maybe cache result globally
 	async def get_translation_languages(self) -> SupportedTranslationLanguages:
