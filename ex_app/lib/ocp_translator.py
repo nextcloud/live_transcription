@@ -156,13 +156,14 @@ class OCPTranslator(ATranslator):
 			})
 
 			i = 0
+			wait_time = 2
 			# wait for 30 minutes
 			while task.status != "STATUS_SUCCESSFUL" and task.status != "STATUS_FAILED" and i < 60 * 6:
 				if i < 60 * 3:
-					await asyncio.sleep(5)
+					await asyncio.sleep(min(wait_time**i, 5)) # 1,2,4,5,5,5,5,5,...
 					i += 1
 				else:
-					# pool every 10 secs in the second half
+					# poll every 10 secs in the second half
 					await asyncio.sleep(10)
 					i += 2
 
