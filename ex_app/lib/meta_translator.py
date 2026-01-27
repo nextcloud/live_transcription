@@ -6,10 +6,9 @@
 import asyncio
 import logging
 import threading
-from time import time
 
 from atranslator import ATranslator
-from constants import CACHE_TRANSLATION_LANGS_FOR, OCP_TASK_TIMEOUT
+from constants import OCP_TASK_TIMEOUT
 from livetypes import (
 	SupportedTranslationLanguages,
 	TranslateException,
@@ -37,7 +36,6 @@ class MetaTranslator:
 		self.task_lock = asyncio.Lock()
 		self.task: asyncio.Task | None = None
 		self.__asyncio_tasks_bin: set[asyncio.Task] = set()
-		self.__translation_languages_cache: tuple[float, SupportedTranslationLanguages] | None = None
 
 		self.room_token = room_token
 		self.room_lang_id = room_lang_id
@@ -87,12 +85,6 @@ class MetaTranslator:
 					"tag": "translate",
 				})
 				self.translators[target_lang_id] = OCPTranslator(self.room_lang_id, target_lang_id, self.room_token)
-				try:
-					await self.translators[target_lang_id].is_language_pair_supported()
-				except TranslateException:
-					del self.translators[target_lang_id]
-					del self.sid_translation_lang_map[nc_session_id]
-					raise
 
 			self.translators[target_lang_id].add_session_id(nc_session_id)
 			LOGGER.debug("Added NC session id to the translator", extra={
@@ -350,6 +342,8 @@ class MetaTranslator:
 			_t = asyncio.create_task(self.__shutdown_all_translators())
 			self.__asyncio_tasks_bin.add(_t)
 			_t.add_done_callback(self.__asyncio_tasks_bin.discard)
+			# todo: signal to higher level that all translators are removed?
+			# todo: add target back?
 		except TranslateException as e:
 			LOGGER.error("Translation task raised a translation exception", exc_info=e, extra={
 				"origin_language": segment.origin_language,
@@ -364,23 +358,14 @@ class MetaTranslator:
 			})
 
 	async def is_target_lang_supported(self, target_lang_id: str) -> bool:
-		tmp_translator = OCPTranslator(self.room_lang_id, target_lang_id, self.room_token)
-		return await tmp_translator.is_language_pair_supported()
+		return await OCPTranslator.is_language_pair_supported(self.room_lang_id, target_lang_id)
 
-	async def get_translation_languages(self) -> SupportedTranslationLanguages:
+	@staticmethod
+	async def get_translation_languages() -> SupportedTranslationLanguages:
 		"""
 		Raises
 		------
 			TranslateFatalException
 			TranslateException
 		"""  # noqa
-		if self.__translation_languages_cache:
-			cached_time, cached_langs = self.__translation_languages_cache
-			if (time() - cached_time) < CACHE_TRANSLATION_LANGS_FOR:
-				return cached_langs
-
-		# use any target lang id, e.g. english
-		tmp_translator = OCPTranslator(self.room_lang_id, "en", self.room_token)
-		langs = await tmp_translator.get_translation_languages()
-		self.__translation_languages_cache = (time(), langs)
-		return langs
+		return await OCPTranslator.get_translation_languages()

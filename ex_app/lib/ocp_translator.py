@@ -4,24 +4,19 @@
 #
 
 import asyncio
+import json
 import logging
 import os
-import time
 from typing import Literal
 
 import niquests
 from atranslator import ATranslator
-from constants import CACHE_TRANSLATION_TASK_TYPES_FOR, OCP_TASK_PROC_SCHED_RETRIES
-from livetypes import (
-	LanguageModel,
-	SupportedTranslationLanguages,
-	TranslateException,
-	TranslateFatalException,
-	TranslateLangPairException,
-)
+from constants import OCP_TASK_PROC_SCHED_RETRIES
+from livetypes import LanguageModel, SupportedTranslationLanguages, TranslateException, TranslateFatalException
 from models import LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp, NextcloudException
 from pydantic import BaseModel, ValidationError
+from utils import timed_cache_async
 
 LOGGER = logging.getLogger("lt.ocp_translator")
 TRANSLATE_TASK_TYPE = "core:text2text:translate"
@@ -83,14 +78,28 @@ class TaskTypesResponse(BaseModel):
 	types: dict[str, TaskType]
 
 
+OCP_ORIGIN_LANG_ID: str | None = None
+
+
 class OCPTranslator(ATranslator):
 	def __init__(self, origin_language: str, target_language: str, room_token: str):
+		global OCP_ORIGIN_LANG_ID
 		super().__init__(origin_language, target_language, room_token)
+		OCP_ORIGIN_LANG_ID = origin_language
 
-		self.__ocp_origin_lang_id = origin_language
-		self.__task_types_cache: tuple[float, TaskTypesResponse] | None = None
+	def __try_parse_ocs_response(self, response: niquests.Response | None) -> dict | str:
+		if response is None or response.text is None:
+			return "No response"
+		try:
+			ocs_response = json.loads(response.text)
+			if not (ocs_data := ocs_response.get("ocs", {}).get("data")):
+				return response.text
+			return ocs_data
+		except json.JSONDecodeError:
+			return response.text
 
 	async def translate(self, message: str) -> str:  # noqa: C901
+		global OCP_ORIGIN_LANG_ID
 		nc = AsyncNextcloudApp()
 
 		sched_tries = OCP_TASK_PROC_SCHED_RETRIES
@@ -100,7 +109,7 @@ class OCPTranslator(ATranslator):
 				if sched_tries <= 0:
 					raise TranslateException("Failed to schedule Nextcloud TaskProcessing task, tried 3 times")
 
-				# todo: webhook callback instead of polling
+				# todo: webhook callback instead of polling, maybe just tighten polling intervals
 				response = await nc.ocs(
 					"POST",
 					"/ocs/v2.php/taskprocessing/tasks_consumer/schedule",
@@ -110,7 +119,7 @@ class OCPTranslator(ATranslator):
 						"customId": f"lt-{self.room_token}-{self.origin_language}-{self.target_language}",
 						"input": {
 							"input": message,
-							"origin_language": self.__ocp_origin_lang_id,
+							"origin_language": OCP_ORIGIN_LANG_ID or self.origin_language,
 							"target_language": self.target_language,
 						},
 					},
@@ -135,6 +144,13 @@ class OCPTranslator(ATranslator):
 					await asyncio.sleep(30)
 					continue
 
+				if e.status_code // 100 == 4:
+					# todo: use this after NextcloudException.response is added in nc_py_api
+					ocs_response = self.__try_parse_ocs_response(e.response)
+					raise TranslateFatalException(
+						f"Failed to schedule Nextcloud TaskProcessing task due to client error: {ocs_response}",
+					) from e
+
 				LOGGER.error("NextcloudException during task scheduling", exc_info=e, extra={
 					"origin_language": self.origin_language,
 					"target_language": self.target_language,
@@ -144,7 +160,10 @@ class OCPTranslator(ATranslator):
 					"nc_exc_status_code": str(e.status_code),
 					"tag": "translate",
 				})
-				raise TranslateException("Failed to schedule Nextcloud TaskProcessing task") from e
+				# todo: use this after NextcloudException.response is added in nc_py_api
+				ocs_response = self.__try_parse_ocs_response(e.response)
+				raise TranslateException(f"Failed to schedule Nextcloud TaskProcessing task: {ocs_response}") from e
+				# raise TranslateException("Failed to schedule Nextcloud TaskProcessing task") from e
 
 		try:
 			task = TaskResponse.model_validate(response).task
@@ -211,7 +230,9 @@ class OCPTranslator(ATranslator):
 
 		return task.output["output"]
 
-	async def __get_task_types(self) -> TaskTypesResponse:
+	@staticmethod
+	@timed_cache_async()
+	async def __get_task_types() -> TaskTypesResponse:
 		"""
 		Raises
 		------
@@ -219,11 +240,6 @@ class OCPTranslator(ATranslator):
 			TranslateException
 		"""  # noqa
 		nc = AsyncNextcloudApp()
-
-		if self.__task_types_cache:
-			cached_time, cached_ttypes = self.__task_types_cache
-			if (time.time() - cached_time) < CACHE_TRANSLATION_TASK_TYPES_FOR:
-				return cached_ttypes
 
 		try:
 			response = await nc.ocs(
@@ -251,8 +267,8 @@ class OCPTranslator(ATranslator):
 			)
 
 		if (
-			task_types.types[TRANSLATE_TASK_TYPE].inputShape.get("origin_language") is None
-			or task_types.types[TRANSLATE_TASK_TYPE].inputShape.get("target_language") is None
+			"origin_language" not in task_types.types[TRANSLATE_TASK_TYPE].inputShape
+			or "target_language" not in task_types.types[TRANSLATE_TASK_TYPE].inputShape
 		):
 			raise TranslateFatalException(
 				'Nextcloud TaskProcessing text2text translate task type does not have both "origin_language" and'
@@ -260,47 +276,55 @@ class OCPTranslator(ATranslator):
 				' shutting down translator.',
 			)
 
-		self.__task_types_cache = (time.time(), task_types)
 		return task_types
 
-	async def is_language_pair_supported(self):
+	@staticmethod
+	@timed_cache_async()
+	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
 		"""Also sets self.__ocp_origin_lang_id to AUTO_DETECT_ORIGIN_LANG_ID if the origin language is not supported but auto-detect is."""  # noqa: E501
 
-		task_types = await self.__get_task_types()
+		global OCP_ORIGIN_LANG_ID
+
+		task_types = await OCPTranslator.__get_task_types()
 
 		if not any(
-			olang.value == self.origin_language
+			olang.value == origin_language
 			for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]
 		):
 			if not any(
 				olang.value == AUTO_DETECT_ORIGIN_LANG_ID
 				for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]
 			):
-				raise TranslateLangPairException(
-					f'Nextcloud TaskProcessing text2text translate task type does not support origin language'
-					f' "{self.origin_language}", nor any auto-detection of the origin language.'
+				LOGGER.warning(
+					'Nextcloud TaskProcessing text2text translate task type does not support origin language'
+					' "%s", nor any auto-detection of the origin language.',
+					origin_language,
 				)
-			self.__ocp_origin_lang_id = AUTO_DETECT_ORIGIN_LANG_ID
+				return False
+			OCP_ORIGIN_LANG_ID = AUTO_DETECT_ORIGIN_LANG_ID
 
 		if not any(
-			tlang.value == self.target_language
+			tlang.value == target_language
 			for tlang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["target_language"]
 		):
-			raise TranslateLangPairException(
-				"Nextcloud TaskProcessing text2text translate task type does not support translation to target language"
-				f' "{self.target_language}".',
+			LOGGER.warning(
+				"Nextcloud TaskProcessing text2text translate task type does not support translation"
+				' to target language "%s".',
+				target_language,
 			)
+			return False
 		return True
 
-	# todo: make staticmethod, maybe cache result or leave it in the meta_translator
-	async def get_translation_languages(self) -> SupportedTranslationLanguages:
+	@staticmethod
+	@timed_cache_async()
+	async def get_translation_languages() -> SupportedTranslationLanguages:
 		"""
 		Raises
 		------
 			TranslateFatalException
 			TranslateException
 		"""  # noqa
-		task_types = await self.__get_task_types()
+		task_types = await OCPTranslator.__get_task_types()
 		olangs = {
 			olang.value: LANGUAGE_MAP.get(olang.value, LanguageModel(name=olang.name or olang.value))
 			for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]

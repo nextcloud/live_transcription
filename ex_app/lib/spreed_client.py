@@ -34,7 +34,6 @@ from livetypes import (
 	ReconnectMethod,
 	SigConnectResult,
 	SpreedRateLimitedException,
-	SupportedTranslationLanguages,
 	Target,
 	Transcript,
 	TranscriptTargetNotFoundException,
@@ -1301,9 +1300,6 @@ class SpreedClient:
 					"tag": "transcript",
 				})
 				continue
-
-	async def get_translation_languages(self) -> SupportedTranslationLanguages:
-		return await self.meta_translator.get_translation_languages()
 
 	async def set_target_language(self, nc_session_id: str, target_lang_id: str, new_call: bool = False):
 		"""
