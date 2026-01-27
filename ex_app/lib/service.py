@@ -11,7 +11,6 @@ from livetypes import (
 	RoomLanguageSetRequest,
 	SigConnectResult,
 	SpreedClientException,
-	SupportedTranslationLanguages,
 	TargetLanguageSetRequest,
 	TranscribeRequest,
 	TranscriptTargetNotFoundException,
@@ -225,23 +224,6 @@ class Application:
 
 			spreed_client = self.spreed_clients[req.roomToken]
 			await spreed_client.set_language(req.langId)
-
-	async def get_translation_languages(self, room_token: str) -> SupportedTranslationLanguages:
-		"""
-		Raises
-		------
-			SpreedClientException: If no SpreedClient exists for the given room token
-			TranslateFatalException: If a fatal error occurs and all translators should be removed
-			TranslateException: If any other translation error occurs
-		"""  # noqa
-		if room_token not in self.spreed_clients:
-			raise SpreedClientException(
-				f"No SpreedClient for room token {room_token}, cannot get supported origin and target languages."
-				" Start a call and add at least one participant first."
-			)
-		async with self.spreed_clients_lock:
-			spreed_client = self.spreed_clients[room_token]
-			return await spreed_client.get_translation_languages()
 
 	async def set_target_language(self, req: TargetLanguageSetRequest) -> None:
 		"""

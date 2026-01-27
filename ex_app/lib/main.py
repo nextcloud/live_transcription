@@ -40,6 +40,7 @@ from fastapi import Body, FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from logger import get_logging_config, setup_logging
+from meta_translator import MetaTranslator
 from models import VOSK_SUPPORTED_LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers, setup_nextcloud_logging
@@ -116,7 +117,6 @@ async def set_call_language(req: RoomLanguageSetRequest):
 # for translation
 @ROUTER_V1.get("/translation/languages", responses={
 		200: {"description": "Supported origin and target translation languages fetched successfully."},
-		404: {"description": "Spreed client not found for the provided room token."},
 		500: {"description": "An error occurred while fetching supported origin and target translation languages."},
 		550: {"description": (
 			"A fatal error occurred while fetching supported origin and target translation languages."
@@ -132,10 +132,7 @@ async def set_call_language(req: RoomLanguageSetRequest):
 )
 async def get_translation_languages(roomToken: str) -> SupportedTranslationLanguages | JSONResponse:
 	try:
-		# todo: convert this to the caps way of fetching supported translation languages?
-		return await SERVICE.get_translation_languages(roomToken)
-	except SpreedClientException as e:
-		return JSONResponse(status_code=404, content={"error": str(e)})
+		return await MetaTranslator.get_translation_languages()
 	except TranslateFatalException as e:
 		LOGGER.warning("TranslateFatalException during get_translation_languages", exc_info=e)
 		return JSONResponse(

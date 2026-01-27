@@ -9,8 +9,13 @@ import logging
 import os
 import re
 import ssl
+from collections.abc import Callable
+from functools import wraps
+from time import time
+from typing import Any
 from urllib.parse import urlparse
 
+from constants import CACHE_TTL
 from livetypes import HPBSettings
 from nc_py_api import NextcloudApp
 
@@ -116,3 +121,37 @@ def sanitize_websocket_url(ws_url: str) -> str:
 	if not ws_url.removesuffix("/").endswith("/spreed"):
 		ws_url = ws_url.removesuffix("/") + "/spreed"
 	return ws_url
+
+
+# does not support caching of kwargs for recall
+def timed_cache(ttl: int = CACHE_TTL):
+	def decorator(fn: Callable):
+		cached_store: dict[tuple, tuple[float, Any]] = {}
+		@wraps(fn)
+		def wrapper(*args, **kwargs):
+			if args in cached_store:
+				cached_time, cached_value = cached_store[args]
+				if (time() - cached_time) < ttl:
+					return cached_value
+			new_val = fn(*args, **kwargs)
+			cached_store[args] = (time(), new_val)
+			return new_val
+		return wrapper
+	return decorator
+
+
+# does not support caching of kwargs for recall
+def timed_cache_async(ttl: int = CACHE_TTL):
+	def decorator(fn: Callable):
+		cached_store: dict[tuple, tuple[float, Any]] = {}
+		@wraps(fn)
+		async def wrapper(*args, **kwargs):
+			if args in cached_store:
+				cached_time, cached_value = cached_store[args]
+				if (time() - cached_time) < ttl:
+					return cached_value
+			new_val = await fn(*args, **kwargs)
+			cached_store[args] = (time(), new_val)
+			return new_val
+		return wrapper
+	return decorator

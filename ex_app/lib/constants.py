@@ -18,8 +18,7 @@ OCP_TASK_TIMEOUT = 30  # seconds to wait for a translation task to complete
 SEND_TIMEOUT = 10  # timeout for sending transcripts and translations
 # factor by which to increase the timeout on each timeout occurrence for transcripts and translations
 TIMEOUT_INCREASE_FACTOR = 1.5
-CACHE_TRANSLATION_LANGS_FOR = 15 * 60  # cache translation languages for 15 minutes
-CACHE_TRANSLATION_TASK_TYPES_FOR = 15 * 60  # cache translation task types for 15 minutes
+CACHE_TTL = 15 * 60  # cache values for 15 minutes
 
 # todo
 MAX_TRANSCRIPT_SEND_TIMEOUT = 30

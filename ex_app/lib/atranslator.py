@@ -31,10 +31,12 @@ class ATranslator(ABC):
 	async def translate(self, message: str) -> str:
 		...
 
+	@staticmethod
 	@abstractmethod
-	async def is_language_pair_supported(self) -> bool:
+	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
 		...
 
+	@staticmethod
 	@abstractmethod
-	async def get_translation_languages(self) -> SupportedTranslationLanguages:
+	async def get_translation_languages() -> SupportedTranslationLanguages:
 		...
