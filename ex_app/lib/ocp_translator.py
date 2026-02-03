@@ -21,6 +21,8 @@ from utils import timed_cache_async
 LOGGER = logging.getLogger("lt.ocp_translator")
 TRANSLATE_TASK_TYPE = "core:text2text:translate"
 AUTO_DETECT_ORIGIN_LANG_ID = "detect_language"
+OCP_ORIGIN_LANG_ID: str | None = None
+
 
 class Task(BaseModel):
 	id: int
@@ -78,14 +80,10 @@ class TaskTypesResponse(BaseModel):
 	types: dict[str, TaskType]
 
 
-OCP_ORIGIN_LANG_ID: str | None = None
-
 
 class OCPTranslator(ATranslator):
 	def __init__(self, origin_language: str, target_language: str, room_token: str):
-		global OCP_ORIGIN_LANG_ID
 		super().__init__(origin_language, target_language, room_token)
-		OCP_ORIGIN_LANG_ID = origin_language
 
 	def __try_parse_ocs_response(self, response: niquests.Response | None) -> dict | str:
 		if response is None or response.text is None:
@@ -99,7 +97,6 @@ class OCPTranslator(ATranslator):
 			return response.text
 
 	async def translate(self, message: str) -> str:  # noqa: C901
-		global OCP_ORIGIN_LANG_ID
 		nc = AsyncNextcloudApp()
 
 		sched_tries = OCP_TASK_PROC_SCHED_RETRIES
