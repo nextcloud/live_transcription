@@ -142,7 +142,6 @@ class OCPTranslator(ATranslator):
 					continue
 
 				if e.status_code // 100 == 4:
-					# todo: use this after NextcloudException.response is added in nc_py_api
 					ocs_response = self.__try_parse_ocs_response(e.response)
 					raise TranslateFatalException(
 						f"Failed to schedule Nextcloud TaskProcessing task due to client error: {ocs_response}",
@@ -157,10 +156,8 @@ class OCPTranslator(ATranslator):
 					"nc_exc_status_code": str(e.status_code),
 					"tag": "translate",
 				})
-				# todo: use this after NextcloudException.response is added in nc_py_api
 				ocs_response = self.__try_parse_ocs_response(e.response)
 				raise TranslateException(f"Failed to schedule Nextcloud TaskProcessing task: {ocs_response}") from e
-				# raise TranslateException("Failed to schedule Nextcloud TaskProcessing task") from e
 
 		try:
 			task = TaskResponse.model_validate(response).task
