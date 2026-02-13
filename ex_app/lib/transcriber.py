@@ -7,7 +7,6 @@ import asyncio
 import json
 import logging
 import os
-import threading
 from contextlib import suppress
 from functools import partial
 from time import perf_counter
@@ -31,7 +30,7 @@ class VoskTranscriber:
 		session_id: str,
 		language: str,
 		transcript_queue: asyncio.Queue,
-		should_translate: threading.Event,
+		should_translate: asyncio.Event,
 		translate_queue_input: asyncio.Queue,
 	):
 		self.__voskcon: ClientConnection | None = None

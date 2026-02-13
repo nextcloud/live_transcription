@@ -5,7 +5,6 @@
 
 import asyncio
 import logging
-import threading
 
 from atranslator import ATranslator
 from constants import OCP_TASK_TIMEOUT
@@ -27,7 +26,7 @@ class MetaTranslator:
 		room_lang_id: str,
 		translate_queue_input: asyncio.Queue,
 		translate_queue_output: asyncio.Queue,
-		should_translate: threading.Event,
+		should_translate: asyncio.Event,
 	):
 		self.translators: dict[str, ATranslator] = {} # key: target language
 		self.translators_lock = asyncio.Lock()

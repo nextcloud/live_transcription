@@ -8,7 +8,6 @@ import dataclasses
 import json
 import logging
 import os
-import threading
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from secrets import token_urlsafe
@@ -89,7 +88,7 @@ class SpreedClient:
 		self.translate_queue_input: asyncio.Queue = asyncio.Queue()
 		self.translate_queue_output: asyncio.Queue = asyncio.Queue()
 		self.translated_text_sender: asyncio.Task | None = None
-		self.should_translate = threading.Event()  # set if at least one target has translation enabled
+		self.should_translate = asyncio.Event()  # set if at least one target has translation enabled
 		self.meta_translator = MetaTranslator(
 			room_token,
 			room_lang_id,
