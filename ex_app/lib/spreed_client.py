@@ -82,7 +82,7 @@ class SpreedClient:
 		self._transcript_sender: asyncio.Task | None = None
 		self.transcribers: dict[str, VoskTranscriber] = {}
 		self.transcriber_lock = asyncio.Lock()
-		self.defunct = threading.Event()
+		self.defunct = asyncio.Event()
 		self._close_task: asyncio.Task | None = None
 		self._deferred_close_task: asyncio.Task | None = None
 		self._reconnect_task: asyncio.Task | None = None

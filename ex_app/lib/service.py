@@ -290,18 +290,16 @@ class Application:
 				"tag": "connection",
 			})
 			asyncio.get_running_loop().call_soon_threadsafe(spreed_client.close)
-			ret = self.spreed_clients[room_token].defunct.wait(
-				timeout=HPB_SHUTDOWN_TIMEOUT
-			)  # wait for the client to close
-			if not ret:
+			try:
+				await asyncio.wait_for(self.spreed_clients[room_token].defunct.wait(), HPB_SHUTDOWN_TIMEOUT)
+				LOGGER.info("Closed SpreedClient for room token %s", room_token, extra={
+					"room_token": room_token,
+					"tag": "connection",
+				})
+			except TimeoutError:
 				LOGGER.error("Timeout while waiting for SpreedClient to close for room token %s", room_token, extra={
 					"room_token": room_token,
 					"tag": "connection",
 				})
-				return
 
-			LOGGER.info("Closed SpreedClient for room token %s", room_token, extra={
-				"room_token": room_token,
-				"tag": "connection",
-			})
 			del self.spreed_clients[room_token]
