@@ -8,6 +8,7 @@ import dataclasses
 import json
 import logging
 import os
+import weakref
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from secrets import token_urlsafe
@@ -65,7 +66,7 @@ class SpreedClient:
 		room_token: str,
 		hpb_settings: HPBSettings,
 		room_lang_id: str,
-		leave_call_cb: Callable[[str], Awaitable[None]],  # room_token
+		leave_call_cb: Callable[[str], Awaitable[None]] | None,  # room_token
 	) -> None:
 		self.id = 0
 		self._server: ClientConnection | None = None
@@ -698,7 +699,8 @@ class SpreedClient:
 			self._server = None
 
 		self.defunct.set()
-		if not app_closing:
+		print(f"{self.leave_call_cb=}, {app_closing=}", flush=True)
+		if not app_closing and self.leave_call_cb:
 			await self.leave_call_cb(self.room_token)
 
 	async def receive(self, timeout: int = 0) -> dict | None:
@@ -1098,25 +1100,36 @@ class SpreedClient:
 			ice_servers = None
 		rtc_config = RTCConfiguration(iceServers=ice_servers)
 		pc = RTCPeerConnection(configuration=rtc_config)
+		weakself = weakref.ref(self)
 
 		@pc.on("connectionstatechange")
 		async def on_connectionstatechange():
 			LOGGER.debug("Peer connection state changed", extra={
 				"session_id": spkr_sid,
 				"connection_state": pc.connectionState,
-				"room_token": self.room_token,
+				"room_token": weakself().room_token if weakself() else None,
 				"tag": "peer_connection",
 			})
+
+			if not weakself():
+				LOGGER.error("SpreedClient instance is gone, cannot handle connection state change", extra={
+					"session_id": spkr_sid,
+					"connection_state": pc.connectionState,
+					"room_token": None,
+					"tag": "peer_connection",
+				})
+				return
+
 			if pc.connectionState in ("failed", "closed"):
 				LOGGER.debug("Peer connection for %s is %s", spkr_sid, pc.connectionState, extra={
 					"session_id": spkr_sid,
 					"connection_state": pc.connectionState,
-					"room_token": self.room_token,
+					"room_token": weakself().room_token,
 					"tag": "peer_connection",
 				})
-				async with self.peer_connection_lock:
-					if spkr_sid in self.peer_connections:
-						del self.peer_connections[spkr_sid]
+				async with weakself().peer_connection_lock:
+					if spkr_sid in weakself().peer_connections:
+						del weakself().peer_connections[spkr_sid]
 
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
@@ -1124,40 +1137,49 @@ class SpreedClient:
 			if track.kind == "audio":
 				LOGGER.debug("Receiving %s track from %s", track.kind, spkr_sid, extra={
 					"session_id": spkr_sid,
-					"room_token": self.room_token,
+					"room_token": weakself().room_token if weakself() else None,
 					"tag": "track",
 				})
+
+				if not weakself():
+					LOGGER.error("SpreedClient instance is gone, cannot handle track", extra={
+						"session_id": spkr_sid,
+						"room_token": None,
+						"tag": "track",
+					})
+					return
+
 				stream = AudioStream(track)
-				async with self.transcriber_lock:
-					self.transcribers[spkr_sid] = VoskTranscriber(
+				async with weakself().transcriber_lock:
+					weakself().transcribers[spkr_sid] = VoskTranscriber(
 						spkr_sid,
-						self.room_lang_id,
-						self.transcript_queue,
-						self.should_translate,
-						self.translate_queue_input,
+						weakself().room_lang_id,
+						weakself().transcript_queue,
+						weakself().should_translate,
+						weakself().translate_queue_input,
 					)
 
 					try:
-						await self.transcribers[spkr_sid].connect()
-						await self.transcribers[spkr_sid].start(stream=stream)
+						await weakself().transcribers[spkr_sid].connect()
+						await weakself().transcribers[spkr_sid].start(stream=stream)
 					except Exception:
 						LOGGER.exception("Error in connection and start of the Vosk server. Cannot continue further.",
 							extra={
 								"server_url": os.getenv("LT_VOSK_SERVER_URL", "ws://localhost:2702"),
 								"session_id": spkr_sid,
-								"room_token": self.room_token,
+								"room_token": weakself().room_token,
 								"tag": "vosk",
 							},
 						)
-						if not self._close_task:
-							self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
+						if not weakself()._close_task:
+							weakself()._close_task = asyncio.create_task(weakself().close(), name=f"close-{weakself().room_token}")
 						return
 
-					LOGGER.debug("Started transcriber for %s in %s", spkr_sid, LANGUAGE_MAP.get(self.room_lang_id).name,
+					LOGGER.debug("Started transcriber for %s in %s", spkr_sid, LANGUAGE_MAP.get(weakself().room_lang_id).name,
 						extra={
 							"session_id": spkr_sid,
-							"room_lang_id": self.room_lang_id,
-							"room_token": self.room_token,
+							"room_lang_id": weakself().room_lang_id,
+							"room_token": weakself().room_token,
 							"tag": "transcriber",
 						},
 					)
@@ -1227,17 +1249,18 @@ class SpreedClient:
 		timeout = SEND_TIMEOUT
 		timeout_count = 0
 		while True:
-			if self.defunct.is_set():
-				LOGGER.debug("SpreedClient is defunct, waiting before sending transcripts", extra={
-					"room_token": self.room_token,
-					"tag": "transcript",
-				})
-				await asyncio.sleep(2)
-				continue
-
-			transcript: Transcript = await self.transcript_queue.get()  # type: ignore[annotation-unchecked]
+			# todo
+			# if self.defunct.is_set():
+			# 	LOGGER.debug("SpreedClient is defunct, waiting before sending transcripts", extra={
+			# 		"room_token": self.room_token,
+			# 		"tag": "transcript",
+			# 	})
+			# 	await asyncio.sleep(2)
+			# 	continue
 
 			try:
+				transcript: Transcript = await self.transcript_queue.get()  # type: ignore[annotation-unchecked]
+
 				await asyncio.wait_for(
 					self.send_transcript(transcript),
 					timeout=timeout,
@@ -1352,9 +1375,9 @@ class SpreedClient:
 		timeout = SEND_TIMEOUT
 		timeout_count = 0
 		while True:
-			segment: TranslateInputOutput = await self.translate_queue_output.get()  # type: ignore[annotation-unchecked]
-
 			try:
+				segment: TranslateInputOutput = await self.translate_queue_output.get()  # type: ignore[annotation-unchecked]
+
 				await asyncio.wait_for(
 					self.send_translated_text(segment),
 					timeout=timeout,
@@ -1403,8 +1426,6 @@ class SpreedClient:
 
 			except asyncio.CancelledError:
 				LOGGER.debug("Translated text consumer task cancelled", extra={
-					"origin_language": segment.origin_language,
-					"target_language": segment.target_language,
 					"room_token": self.room_token,
 					"tag": "translate",
 				})
