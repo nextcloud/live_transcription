@@ -12,9 +12,9 @@ from functools import partial
 from time import perf_counter
 from urllib.parse import urlparse
 
+import numpy as np
 from aiortc.mediastreams import MediaStreamError
 from audio_stream import AudioStream
-from av.audio.resampler import AudioResampler
 from constants import MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL, VOSK_CONNECT_TIMEOUT
 from livetypes import StreamEndedException, Transcript, TranslateInputOutput, VoskException
 from models import LANGUAGE_MAP
@@ -36,8 +36,8 @@ class VoskTranscriber:
 		self.__voskcon: ClientConnection | None = None
 		self.__voskcon_lock = asyncio.Lock()
 		self.audio_task: asyncio.Task | None = None
+		self.__audio_format_sent = False  # Track if we've sent audio format to server
 
-		self.__resampler = AudioResampler(format="s16", layout="mono", rate=48000)
 		self.__server_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
 
 		self.__session_id = session_id
@@ -57,12 +57,13 @@ class VoskTranscriber:
 				} if ssl_ctx else {}),
 				open_timeout=VOSK_CONNECT_TIMEOUT,
 			)
+			# Reset audio format flag on new connection
+			self.__audio_format_sent = False
+			# Send initial config with language
 			await self.__voskcon.send(
 				json.dumps({
 					"config": {
-						"sample_rate": 48000,
 						"language": self.__language,
-						# "show_words": True,
 					}
 				})
 			)
@@ -175,16 +176,33 @@ class VoskTranscriber:
 				if len(frames) < MAX_AUDIO_FRAMES:
 					continue
 
-				dataframes = bytearray(b"")
-				for fr in frames:
-					for rfr in self.__resampler.resample(fr):
-						dataframes += bytes(rfr.planes[0])[:rfr.samples * 2]
+				# Concatenate frames efficiently using list comprehension + concatenate
+				ndarrays = [f.to_ndarray() for f in frames]
+				compound = np.concatenate(ndarrays, axis=-1)  # join on time axis
+
+				# Send audio format metadata on first chunk
+				if not self.__audio_format_sent:
+					first = frames[0]
+					audio_config = {
+						"config": {
+							"audio_format": first.format.name,
+							"audio_layout": first.layout.name,
+							"audio_sample_rate": int(first.sample_rate or 48000),
+						}
+					}
+					async with self.__voskcon_lock:
+						if not self.__voskcon:
+							raise Exception("Vosk connection is not established, cannot send audio data")
+						await self.__voskcon.send(json.dumps(audio_config))
+					self.__audio_format_sent = True
+
 				frames.clear()
 
 				async with self.__voskcon_lock:
 					if not self.__voskcon:
 						raise Exception("Vosk connection is not established, cannot send audio data")
-					await self.__voskcon.send(bytes(dataframes))
+					# Send raw PCM bytes directly - server already knows format from initial config
+					await self.__voskcon.send(compound.tobytes())
 					result = await self.__voskcon.recv()
 
 				if not result:

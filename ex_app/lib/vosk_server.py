@@ -12,7 +12,10 @@ import os
 from contextlib import suppress
 from urllib.parse import urlparse
 
+import numpy as np
 import websockets as ws
+from av.audio import AudioFrame
+from av.audio.resampler import AudioResampler
 from dotenv import load_dotenv
 from models import MODELS_LIST
 from nc_py_api.ex_app import persistent_storage
@@ -25,6 +28,9 @@ if os.getenv("LT_MAX_WORKERS", "invalid").isnumeric():
 	THREAD_POOL_WORKERS = max(5, int(os.environ["LT_MAX_WORKERS"]))
 SAMPLE_RATE = 48000.0
 DEFAULT_LANGUAGE = "en"
+TARGET_SAMPLE_RATE = int(SAMPLE_RATE)
+TARGET_LAYOUT = "mono"
+TARGET_FORMAT = "s16"
 
 
 models: dict[str, Model] = {}
@@ -78,14 +84,61 @@ async def maybe_release_model(lang: str):
 		logging.warning("Attempted to release a non-existent model: %s", lang)
 
 
-def process_chunk(rec: KaldiRecognizer, message: ws.Data) -> tuple[str, bool]:
-	if isinstance(message, str):
-		if message == '{"eof" : 1}':
-			return rec.FinalResult(), True
-		if message == '{"reset" : 1}':
-			return rec.FinalResult(), False
-		return rec.PartialResult(), False
+class AudioProcessor:
+	"""Reusable audio processor with cached resampler for efficiency."""
 
+	def __init__(self, src_format: str, src_layout: str, src_rate: int):
+		self.src_format = src_format
+		self.src_layout = src_layout
+		self.src_rate = src_rate
+		self.resampler = AudioResampler(
+			format=TARGET_FORMAT,
+			layout=TARGET_LAYOUT,
+			rate=TARGET_SAMPLE_RATE
+		)
+		# Cache dtype based on format
+		self.dtype = self._get_dtype(src_format)
+
+	@staticmethod
+	def _get_dtype(fmt: str) -> np.dtype:
+		"""Map PyAV audio format to numpy dtype."""
+		dtype_map = {
+			"s16": np.int16,
+			"s16p": np.int16,  # planar
+			"s32": np.int32,
+			"s32p": np.int32,  # planar
+			"flt": np.float32,
+			"fltp": np.float32,  # planar
+			"dbl": np.float64,
+			"dblp": np.float64,  # planar
+			"u8": np.uint8,
+			"u8p": np.uint8,  # planar
+		}
+		if fmt not in dtype_map:
+			logging.warning("Unknown audio format '%s', defaulting to int16", fmt)
+		return np.dtype(dtype_map.get(fmt, np.int16))
+
+	def resample_to_vosk_bytes(self, raw: bytes) -> bytes:
+		"""Resample raw audio bytes to Vosk format (s16 mono at TARGET_SAMPLE_RATE)."""
+		arr = np.frombuffer(raw, dtype=self.dtype)
+
+		# Reshape for AudioFrame: [channels, samples]
+		if arr.ndim == 1:
+			arr = arr.reshape(1, -1)
+
+		in_frame = AudioFrame.from_ndarray(arr, format=self.src_format, layout=self.src_layout)
+		in_frame.sample_rate = self.src_rate
+
+		# Resample and collect output
+		out = bytearray()
+		for of in self.resampler.resample(in_frame):
+			# s16 mono => 2 bytes/sample, use memoryview for efficiency
+			out.extend(memoryview(of.planes[0])[: of.samples * 2])
+		return bytes(out)
+
+
+def process_chunk(rec: KaldiRecognizer, message: bytes) -> tuple[str, bool]:
+	"""Process audio chunk with Vosk recognizer."""
 	if rec.AcceptWaveform(message):
 		return rec.Result(), False
 	return rec.PartialResult(), False
@@ -99,12 +152,22 @@ async def recognize(websocket: ws.ServerConnection):  # noqa: C901
 	rec = None
 	lang = DEFAULT_LANGUAGE
 	sample_rate = SAMPLE_RATE
+	model_changed = False
+	audio_processor: AudioProcessor | None = None
 
 	logging.info("Connection from %s", websocket.remote_address)
 
 	while True:
 		try:
 			message = await websocket.recv()
+
+			# Handle EOF message
+			if isinstance(message, str) and message == '{"eof" : 1}':
+				if rec:
+					await websocket.send(rec.FinalResult())
+				logging.info("Stream finished for %s", websocket.remote_address)
+				await maybe_release_model(lang)
+				break
 
 			# Load configuration if provided
 			if isinstance(message, str) and "config" in message:
@@ -119,6 +182,17 @@ async def recognize(websocket: ws.ServerConnection):  # noqa: C901
 				logging.info("Config: %s", config)
 				if "sample_rate" in config:
 					sample_rate = float(config["sample_rate"])
+
+				# Handle audio format configuration
+				if "audio_format" in config and "audio_layout" in config and "audio_sample_rate" in config:
+					audio_processor = AudioProcessor(
+						src_format=config["audio_format"],
+						src_layout=config["audio_layout"],
+						src_rate=int(config["audio_sample_rate"])
+					)
+					logging.info("Audio processor initialized with format=%s, layout=%s, rate=%d",
+						config["audio_format"], config["audio_layout"], config["audio_sample_rate"])
+
 				if "language" in config:
 					# try to release the model if it was already loaded
 					if rec:
@@ -138,17 +212,25 @@ async def recognize(websocket: ws.ServerConnection):  # noqa: C901
 					model_changed = True
 				continue
 
-			if not rec or model_changed:
-				model_changed = False
-				rec = KaldiRecognizer(model, sample_rate)
+			# Handle binary audio payload - assume client sends raw audio in known format
+			if isinstance(message, (bytes, bytearray)):
+				# Audio processor should be initialized by audio format config
+				if audio_processor is None:
+					logging.error("Received audio data before audio format configuration")
+					continue
 
-			response, stop = await loop.run_in_executor(pool, process_chunk, rec, message)
-			await websocket.send(response)
-			if stop:
-				# sending {"eof" : 1} ends the stream and tries to release the model
-				logging.info("Stream finished for %s", websocket.remote_address)
-				await maybe_release_model(lang)
-				break
+				if not rec or model_changed:
+					model_changed = False
+					rec = KaldiRecognizer(model, sample_rate)
+
+				# Resample using cached processor
+				vosk_bytes = audio_processor.resample_to_vosk_bytes(bytes(message))
+
+				response, stop = await loop.run_in_executor(pool, process_chunk, rec, vosk_bytes)
+				await websocket.send(response)
+				if stop:
+					await maybe_release_model(lang)
+					break
 		except ws.exceptions.ConnectionClosedOK:
 			logging.info("Connection closed normally by client: %s", websocket.remote_address)
 			await maybe_release_model(lang)
