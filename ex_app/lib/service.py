@@ -7,9 +7,7 @@ import asyncio
 import gc
 import logging
 import sys
-import weakref
 
-import referrers
 from constants import HPB_SHUTDOWN_TIMEOUT, MAX_CONNECT_TRIES
 from livetypes import (
 	RoomLanguageSetRequest,
@@ -277,22 +275,6 @@ class Application:
 				"room_token": room_token,
 				"tag": "connection",
 			})
-
-	async def get_referrers(self, room_token: str):
-		async with self.spreed_clients_lock:
-			if room_token not in self.spreed_clients:
-				LOGGER.info("No SpreedClient for room token %s active, cannot get references", room_token, extra={
-					"room_token": room_token,
-					"tag": "debug",
-				})
-				return None
-
-			try:
-				return {
-				}
-			finally:
-				print("refcount for client in get_referrers:", sys.getrefcount(self.spreed_clients[room_token]), flush=True)
-				print("referrers graph:", referrers.get_referrer_graph(self.spreed_clients[room_token]), flush=True)
 
 	async def __leave_call_cb(self, room_token: str):
 		async with self.spreed_clients_lock:

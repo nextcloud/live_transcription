@@ -279,18 +279,6 @@ async def get_capabilities() -> dict[str, dict]:
 	}
 
 
-@APP.get("/get_referrers")
-async def get_referrers(roomToken: str):
-	try:
-		return await SERVICE.get_referrers(roomToken)
-	except Exception as e:
-		LOGGER.exception("Exception during get_referrers", exc_info=e)
-		return JSONResponse(
-			status_code=500,
-			content={"error": "Failed to get referrers for the spreed client."},
-		)
-
-
 def enabled_handler(enabled: bool, nc: NextcloudApp | AsyncNextcloudApp) -> str:
 	print(f"enabled={enabled}", flush=True)
 	if enabled:
