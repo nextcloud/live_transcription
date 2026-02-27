@@ -4,6 +4,7 @@ dotenv
 huggingface_hub
 nc_py_api>=0.24.0
 niquests
+numpy
 print_color
 pydantic
 requests

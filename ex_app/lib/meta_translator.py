@@ -170,6 +170,8 @@ class MetaTranslator:
 					"tag": "translate",
 				})
 				self.task.cancel()
+			self.task = None
+		self.__asyncio_tasks_bin.clear()
 
 	def __done_cb(self, future: asyncio.Future):
 		if not self.task:

@@ -12,9 +12,9 @@ from functools import partial
 from time import perf_counter
 from urllib.parse import urlparse
 
+import numpy as np
 from aiortc.mediastreams import MediaStreamError
 from audio_stream import AudioStream
-from av.audio.resampler import AudioResampler
 from constants import MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL, VOSK_CONNECT_TIMEOUT
 from livetypes import StreamEndedException, Transcript, TranslateInputOutput, VoskException
 from models import LANGUAGE_MAP
@@ -37,7 +37,6 @@ class VoskTranscriber:
 		self.__voskcon_lock = asyncio.Lock()
 		self.audio_task: asyncio.Task | None = None
 
-		self.__resampler = AudioResampler(format="s16", layout="mono", rate=48000)
 		self.__server_url = os.environ.get("LT_VOSK_SERVER_URL", "ws://localhost:2702")
 
 		self.__session_id = session_id
@@ -85,6 +84,7 @@ class VoskTranscriber:
 				"tag": "vosk",
 			})
 			self.audio_task.cancel()
+		self.audio_task = None
 
 	def __done_cb(self, stream: AudioStream, future: asyncio.Future):
 		# the audio task is done, clean up
@@ -164,6 +164,10 @@ class VoskTranscriber:
 
 	async def __run_audio_xfer(self, stream: AudioStream):  # noqa: C901
 		frames = []
+		# pre-allocate buffer to avoid repeated heap allocation
+		# 960 samples * 2 bytes * 20 frames = 38400 bytes typical size.
+		dataframes = bytearray(960 * 2 * MAX_AUDIO_FRAMES)
+		dataframes_len = 0
 		last_sent = 0.0
 
 		try:
@@ -171,22 +175,43 @@ class VoskTranscriber:
 				fr = await stream.receive()
 				frames.append(fr)
 
-				# We need to collect frames so we don't send partial results too often
+				# collect frames so we don't send partial results too often
 				if len(frames) < MAX_AUDIO_FRAMES:
 					continue
 
-				dataframes = bytearray(b"")
+				dataframes_len = 0
 				for fr in frames:
-					for rfr in self.__resampler.resample(fr):
-						dataframes += bytes(rfr.planes[0])[:rfr.samples * 2]
+					# we only need to downmix to mono as the input stream is already s16 and 48kHz,
+					# which is what Vosk expects
+					n_channels = len(fr.layout.channels)
+					# only the first fr.samples * n_channels samples are valid.
+					valid_bytes = fr.samples * n_channels * 2  # 2 bytes per s16 sample
+					raw = bytes(fr.planes[0])[:valid_bytes]
+					if n_channels >= 2:
+						# interleaved s16 stereo
+						samples_s16 = np.frombuffer(raw, dtype=np.int16)
+						stereo = samples_s16.reshape(-1, n_channels)
+						mono = stereo.mean(axis=1, dtype=np.float32).astype(np.int16)
+						mono_bytes = mono.tobytes()
+					else:
+						mono_bytes = raw
+
+					chunk_size = len(mono_bytes)
+					new_len = dataframes_len + chunk_size
+
+					if new_len > len(dataframes):
+						dataframes.extend(b"\x00" * (new_len - len(dataframes)))
+					dataframes[dataframes_len:new_len] = mono_bytes
+					dataframes_len = new_len
+
 				frames.clear()
+				del fr
 
 				async with self.__voskcon_lock:
 					if not self.__voskcon:
 						raise Exception("Vosk connection is not established, cannot send audio data")
-					await self.__voskcon.send(bytes(dataframes))
+					await self.__voskcon.send(memoryview(dataframes)[:dataframes_len])
 					result = await self.__voskcon.recv()
-
 				if not result:
 					continue
 

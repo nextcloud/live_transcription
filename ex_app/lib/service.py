@@ -4,9 +4,7 @@
 #
 
 import asyncio
-import gc
 import logging
-import sys
 
 from constants import HPB_SHUTDOWN_TIMEOUT, MAX_CONNECT_TRIES
 from livetypes import (
@@ -290,9 +288,6 @@ class Application:
 					"room_token": room_token,
 					"tag": "connection",
 				})
-				print("refcount for client in __leave_call_cb:", sys.getrefcount(self.spreed_clients[room_token]), flush=True)
-				print("references to client in __leave_call_cb:", gc.get_referrers(self.spreed_clients[room_token]), flush=True)
-				# print("referrers graph:", referrers.get_referrer_graph(self.spreed_clients[room_token]), flush=True)
 				del self.spreed_clients[room_token]
 				return
 
@@ -300,7 +295,9 @@ class Application:
 				"room_token": room_token,
 				"tag": "connection",
 			})
-			asyncio.get_running_loop().call_soon_threadsafe(self.spreed_clients[room_token].close)
+			close_task = asyncio.create_task(self.spreed_clients[room_token].close())
+			self.__task_bin.add(close_task)
+			close_task.add_done_callback(self.__task_bin.discard)
 			try:
 				await asyncio.wait_for(self.spreed_clients[room_token].defunct.wait(), HPB_SHUTDOWN_TIMEOUT)
 				LOGGER.info("Closed SpreedClient for room token %s", room_token, extra={
@@ -313,6 +310,4 @@ class Application:
 					"tag": "connection",
 				})
 
-			print("refcount for client in __leave_call_cb:", sys.getrefcount(self.spreed_clients[room_token]), flush=True)
 			del self.spreed_clients[room_token]
-			print("refcount for client after deletion in __leave_call_cb:", sys.getrefcount(self.spreed_clients.get(room_token, None)), flush=True)
