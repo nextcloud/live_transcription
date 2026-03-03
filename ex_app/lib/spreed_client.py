@@ -1130,6 +1130,12 @@ class SpreedClient:
 				await asyncio.sleep(2)
 				continue
 
+			if self.transcript_queue.qsize() > 20:
+				LOGGER.warning("Transcript queue length: %d", self.transcript_queue.qsize(), extra={
+					"room_token": self.room_token,
+					"tag": "transcript",
+				})
+
 			transcript: Transcript = await self.transcript_queue.get()  # type: ignore[annotation-unchecked]
 
 			try:
