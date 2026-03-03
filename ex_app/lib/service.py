@@ -132,10 +132,13 @@ class Application:
 			"tag": "application",
 		})
 		async with self.spreed_clients_lock:
+			# weakcb = weakref.ref(self.__leave_call_cb)
+			# print("Creating SpreedClient with leave_call_cb:", weakcb(), flush=True)
 			self.spreed_clients[req.roomToken] = SpreedClient(
 				req.roomToken,
 				self.hpb_settings,
 				req.langId,
+				# leave_call_cb=weakcb(),
 				self.__leave_call_cb,
 			)
 
@@ -280,8 +283,11 @@ class Application:
 				})
 				return
 
-			spreed_client = self.spreed_clients[room_token]
-			if spreed_client.defunct.is_set():
+			if self.spreed_clients[room_token].defunct.is_set():
+				LOGGER.debug("SpreedClient for room token %s is already closed", room_token, extra={
+					"room_token": room_token,
+					"tag": "connection",
+				})
 				del self.spreed_clients[room_token]
 				return
 
@@ -289,19 +295,19 @@ class Application:
 				"room_token": room_token,
 				"tag": "connection",
 			})
-			asyncio.get_running_loop().call_soon_threadsafe(spreed_client.close)
-			ret = self.spreed_clients[room_token].defunct.wait(
-				timeout=HPB_SHUTDOWN_TIMEOUT
-			)  # wait for the client to close
-			if not ret:
+			close_task = asyncio.create_task(self.spreed_clients[room_token].close())
+			self.__task_bin.add(close_task)
+			close_task.add_done_callback(self.__task_bin.discard)
+			try:
+				await asyncio.wait_for(self.spreed_clients[room_token].defunct.wait(), HPB_SHUTDOWN_TIMEOUT)
+				LOGGER.info("Closed SpreedClient for room token %s", room_token, extra={
+					"room_token": room_token,
+					"tag": "connection",
+				})
+			except TimeoutError:
 				LOGGER.error("Timeout while waiting for SpreedClient to close for room token %s", room_token, extra={
 					"room_token": room_token,
 					"tag": "connection",
 				})
-				return
 
-			LOGGER.info("Closed SpreedClient for room token %s", room_token, extra={
-				"room_token": room_token,
-				"tag": "connection",
-			})
 			del self.spreed_clients[room_token]

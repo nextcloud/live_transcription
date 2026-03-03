@@ -4,6 +4,7 @@
 #
 
 import logging
+import weakref
 
 from aiortc import AudioStreamTrack
 from av.audio.frame import AudioFrame
@@ -17,10 +18,13 @@ class AudioStream:
 		self.track = track
 		self._ended = False
 
+		weakself = weakref.ref(self)
+
 		@track.on("ended")
 		async def on_ended():
 			LOGGER.debug("Track ended", extra={"tag": "track"})
-			self._ended = True
+			if weakself():
+				weakself()._ended = True
 
 	async def receive(self) -> AudioFrame:
 		"""Receive the next audio frame."""

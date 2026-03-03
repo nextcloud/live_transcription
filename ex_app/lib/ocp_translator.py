@@ -104,9 +104,8 @@ class OCPTranslator(ATranslator):
 			try:
 				sched_tries -= 1
 				if sched_tries <= 0:
-					raise TranslateException("Failed to schedule Nextcloud TaskProcessing task, tried 3 times")
+					raise TranslateException("Failed to schedule TaskProcessing translation task, tried 3 times")
 
-				# todo: webhook callback instead of polling, maybe just tighten polling intervals
 				response = await nc.ocs(
 					"POST",
 					"/ocs/v2.php/taskprocessing/tasks_consumer/schedule",
@@ -128,27 +127,30 @@ class OCPTranslator(ATranslator):
 						"Failed to schedule Nextcloud TaskProcessing task: "
 						"This app is setup to use a translation provider in Nextcloud. "
 						"No such provider is installed on Nextcloud instance. "
-						"Please install integration_openai, translate2 or any other text2text translate provider.",
+						"Please install any text2text translate provider from the Backend apps section in "
+						"https://docs.nextcloud.com/server/latest/admin_manual/ai/overview.html#machine-translation.",
 					) from e
 
 				if e.status_code == niquests.codes.too_many_requests:  # type: ignore[attr-defined]
-					LOGGER.warning("Rate limited during task scheduling, waiting 30s before retrying", extra={
-						"origin_language": self.origin_language,
-						"target_language": self.target_language,
-						"tries_left": sched_tries,
-						"tag": "translate",
-					})
+					LOGGER.warning(
+						"Rate limited during translation task scheduling, waiting 30s before retrying",
+						extra={
+							"origin_language": self.origin_language,
+							"target_language": self.target_language,
+							"tries_left": sched_tries,
+							"tag": "translate",
+						},
+					)
 					await asyncio.sleep(30)
 					continue
 
 				if e.status_code // 100 == 4:
-					# todo: use this after NextcloudException.response is added in nc_py_api
 					ocs_response = self.__try_parse_ocs_response(e.response)
 					raise TranslateFatalException(
-						f"Failed to schedule Nextcloud TaskProcessing task due to client error: {ocs_response}",
+						f"Failed to schedule TaskProcessing translation task due to client error: {ocs_response}",
 					) from e
 
-				LOGGER.error("NextcloudException during task scheduling", exc_info=e, extra={
+				LOGGER.error("NextcloudException during translation task scheduling", exc_info=e, extra={
 					"origin_language": self.origin_language,
 					"target_language": self.target_language,
 					"tries_left": sched_tries,
@@ -157,14 +159,12 @@ class OCPTranslator(ATranslator):
 					"nc_exc_status_code": str(e.status_code),
 					"tag": "translate",
 				})
-				# todo: use this after NextcloudException.response is added in nc_py_api
 				ocs_response = self.__try_parse_ocs_response(e.response)
-				raise TranslateException(f"Failed to schedule Nextcloud TaskProcessing task: {ocs_response}") from e
-				# raise TranslateException("Failed to schedule Nextcloud TaskProcessing task") from e
+				raise TranslateException(f"Failed to schedule TaskProcessing translation task: {ocs_response}") from e
 
 		try:
 			task = TaskResponse.model_validate(response).task
-			LOGGER.debug("Initial task schedule response", extra={
+			LOGGER.debug("Initial translation task schedule response", extra={
 				"origin_language": self.origin_language,
 				"target_language": self.target_language,
 				"task": task,
@@ -173,57 +173,71 @@ class OCPTranslator(ATranslator):
 
 			i = 0
 			wait_time = 2
-			# wait for 30 minutes
-			while task.status != "STATUS_SUCCESSFUL" and task.status != "STATUS_FAILED" and i < 60 * 6:
-				if i < 60 * 3:
-					await asyncio.sleep(min(wait_time**i, 5)) # 1,2,4,5,5,5,5,5,...
-					i += 1
+			now_waiting_for = 0
+
+			# wait for 2 minutes, which is already quite long for a live translation task
+			while task.status != "STATUS_SUCCESSFUL" and task.status != "STATUS_FAILED" and now_waiting_for < 120:
+				i += 1
+				if now_waiting_for < 60:
+					wait_time = min(wait_time**i, 5) # 1,2,4,5,5,5,5,5,...
+					now_waiting_for += wait_time
+					await asyncio.sleep(wait_time)
 				else:
 					# poll every 10 secs in the second half
+					now_waiting_for += 10
 					await asyncio.sleep(10)
-					i += 2
 
 				try:
 					response = await nc.ocs("GET", f"/ocs/v1.php/taskprocessing/tasks_consumer/task/{task.id}")
 				except NextcloudException as e:
 					if e.status_code == niquests.codes.too_many_requests:  # type: ignore[attr-defined]
-						LOGGER.warning("Rate limited during task polling, waiting 10s before retrying", extra={
-							"origin_language": self.origin_language,
-							"target_language": self.target_language,
-							"tries_so_far": i,
-							"tag": "translate",
-						})
+						LOGGER.warning(
+							"Rate limited during translation task polling, waiting 10s before retrying",
+							extra={
+								"origin_language": self.origin_language,
+								"target_language": self.target_language,
+								"tries_so_far": i,
+								"waiting_time": now_waiting_for,
+								"tag": "translate",
+							},
+						)
+						now_waiting_for += 10
 						await asyncio.sleep(10)
-						i += 2
 						continue
-					raise TranslateException("Failed to poll Nextcloud TaskProcessing task") from e
+					raise TranslateException("Failed to poll TaskProcessing translation task") from e
 				except niquests.RequestException as e:
 					LOGGER.warning("Ignored error during task polling", exc_info=e, extra={
 						"origin_language": self.origin_language,
 						"target_language": self.target_language,
 						"tries_so_far": i,
+						"waiting_time": now_waiting_for,
 						"tag": "translate",
 					})
+					now_waiting_for += 5
 					await asyncio.sleep(5)
-					i += 1
 					continue
 
 				task = TaskResponse.model_validate(response).task
-				LOGGER.debug(f"Task poll ({i * 5}s) response", extra={  # noqa: G004
+				LOGGER.debug(f"Translation task poll ({i * 5}s) response", extra={  # noqa: G004
 					"origin_language": self.origin_language,
 					"target_language": self.target_language,
 					"tries_so_far": i,
+					"waiting_time": now_waiting_for,
 					"task": task,
 					"tag": "translate",
 				})
 		except ValidationError as e:
-			raise TranslateException("Failed to parse Nextcloud TaskProcessing task result") from e
+			raise TranslateException("Failed to parse TaskProcessing translation task result") from e
 
 		if task.status != "STATUS_SUCCESSFUL":
-			raise TranslateException("Nextcloud TaskProcessing Task failed")
+			raise TranslateException(
+				f"TaskProcessing translation task failed with status {task.status} "
+				f"after waiting {now_waiting_for} seconds "
+				f"for origin_language={self.origin_language} and target_language={self.target_language}",
+			)
 
 		if not isinstance(task.output, dict) or "output" not in task.output:
-			raise TranslateException('"output" key not found in Nextcloud TaskProcessing task result')
+			raise TranslateException(f'"output" key not found in TaskProcessing translation task result: {task.output}')
 
 		return task.output["output"]
 
@@ -260,7 +274,8 @@ class OCPTranslator(ATranslator):
 				"Nextcloud TaskProcessing does not have text2text translate task type, "
 				"this app is setup to use a translation provider in Nextcloud. "
 				"No such provider is installed on Nextcloud instance. "
-				"Please install integration_openai, translate2 or any other text2text translate provider.",
+				"Please install any text2text translate provider from the Backend apps section in "
+				"https://docs.nextcloud.com/server/latest/admin_manual/ai/overview.html#machine-translation.",
 			)
 
 		if (

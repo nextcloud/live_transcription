@@ -50,7 +50,7 @@ loggers:
     - file_json
 
   lt:
-    level: DEBUG
+    level: WARNING
     handlers:
     - stderr
     - file_json
