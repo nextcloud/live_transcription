@@ -26,7 +26,7 @@ IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are requi
 	<bugs>https://github.com/nextcloud/live_transcription/issues</bugs>
 	<repository type="git">https://github.com/nextcloud/live_transcription</repository>
 	<dependencies>
-		<nextcloud min-version="32" max-version="33"/>
+		<nextcloud min-version="32" max-version="32"/>
 	</dependencies>
 	<external-app>
 		<docker-install>
