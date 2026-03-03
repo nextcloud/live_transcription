@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 
 ## Unreleased
 
+## [2.1.0] - 2026-03-03
+
+### Added
+- add support for NC 34
+
+### Changed
+- perf(OCPTranslator): Speedup translations (#61) @marcelklehr
+- switch to staticmethod for task types for no room requirement (#66) @kyteinsky
+
+### Fixed
+- Make is_language_pair_supported actually return True (#60) @marcelklehr
+- use the larger LANGUAGE_MAP and fallback to lang name (#66) @kyteinsky
+- fix ocp_translator detect_language detection (#66) @kyteinsky
+- memory leak improvements (#67) @kyteinsky
+
+
 ## [2.0.0] - 2026-01-20
 
 ### Breaking changes
