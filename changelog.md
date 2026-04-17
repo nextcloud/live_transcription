@@ -11,6 +11,17 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 ## Unreleased
 
 
+## 1.3.1 - 2026-04-17
+
+### Changed
+- set max NC version to 32
+- add a transcript queue length log when the size exceeds 20 (#68) @kyteinsky
+
+### Fixed
+- ignore client_not_found errors (#69) @kyteinsky
+- get HPB settings in a lazy way to not crash on startup (#76) @kyteinsky
+
+
 ## 1.3.0 - 2025-12-02
 
 ### Added
