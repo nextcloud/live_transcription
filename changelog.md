@@ -8,133 +8,130 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
-## Unreleased
-
-## [2.1.0] - 2026-03-03
+## 2.1.0 - 2026-03-03
 
 ### Added
 - add support for NC 34
 
 ### Changed
-- perf(OCPTranslator): Speedup translations (#61) @marcelklehr
-- switch to staticmethod for task types for no room requirement (#66) @kyteinsky
+- perf(OCPTranslator): Speedup translations ([#61](https://github.com/nextcloud/live_transcription/pull/61)) @marcelklehr
+- switch to staticmethod for task types for no room requirement ([#66](https://github.com/nextcloud/live_transcription/pull/66)) @kyteinsky
 
 ### Fixed
-- Make is_language_pair_supported actually return True (#60) @marcelklehr
-- use the larger LANGUAGE_MAP and fallback to lang name (#66) @kyteinsky
-- fix ocp_translator detect_language detection (#66) @kyteinsky
-- memory leak improvements (#67) @kyteinsky
+- Make is_language_pair_supported actually return True ([#60](https://github.com/nextcloud/live_transcription/pull/60)) @marcelklehr
+- use the larger LANGUAGE_MAP and fallback to lang name ([#66](https://github.com/nextcloud/live_transcription/pull/66)) @kyteinsky
+- fix ocp_translator detect_language detection ([#66](https://github.com/nextcloud/live_transcription/pull/66)) @kyteinsky
+- memory leak improvements ([#67](https://github.com/nextcloud/live_transcription/pull/67)) @kyteinsky
 
 
-## [2.0.0] - 2026-01-20
+## 2.0.0 - 2026-01-20
+
+### Added
+- feat: Live translation
 
 ### Breaking changes
-
 - Dropped support for NC < 33
 
-### New
-
-- feat: Live translation
 
 ## 1.3.0 - 2025-12-02
 
 ### Added
-- add /capabilities endpoint (#47) @kyteinsky
+- add /capabilities endpoint ([#47](https://github.com/nextcloud/live_transcription/pull/47)) @kyteinsky
 
 ### Fixed
-- clear reconnection task in the HPB close() (#48) @kyteinsky
-- remove redundant keep_peers arg in HPB close() (#48) @kyteinsky
-- delay 2 secs between reconnection tries (#48) @kyteinsky
-- conditional reconnection (#48) @kyteinsky
-- catch HPB server connection exceptions (#48) @kyteinsky
-- join the call after short resume (#48) @kyteinsky
-- continue with normal ops if short resume succeeds (#48) @kyteinsky
+- clear reconnection task in the HPB close() ([#48](https://github.com/nextcloud/live_transcription/pull/48)) @kyteinsky
+- remove redundant keep_peers arg in HPB close() ([#48](https://github.com/nextcloud/live_transcription/pull/48)) @kyteinsky
+- delay 2 secs between reconnection tries ([#48](https://github.com/nextcloud/live_transcription/pull/48)) @kyteinsky
+- conditional reconnection ([#48](https://github.com/nextcloud/live_transcription/pull/48)) @kyteinsky
+- catch HPB server connection exceptions ([#48](https://github.com/nextcloud/live_transcription/pull/48)) @kyteinsky
+- join the call after short resume ([#48](https://github.com/nextcloud/live_transcription/pull/48)) @kyteinsky
+- continue with normal ops if short resume succeeds ([#48](https://github.com/nextcloud/live_transcription/pull/48)) @kyteinsky
 
 
 ## 1.2.3 - 2025-11-25
 
 ### Fixed
-- pure asyncio locks (#44) @kyteinsky
-- prevent race condition of start when a client is shutting down (#44) @kyteinsky
-- increase HPB timeout and add reconnection logic (#44) @kyteinsky
-- use HPB session id to remove targets from signaling messages (#44) @kyteinsky
-- ensure peer connections are healthy on reconnect (#44) @kyteinsky
-- pause sending transcript until the HPB connection re-establishes (#44) @kyteinsky
+- pure asyncio locks ([#44](https://github.com/nextcloud/live_transcription/pull/44)) @kyteinsky
+- prevent race condition of start when a client is shutting down ([#44](https://github.com/nextcloud/live_transcription/pull/44)) @kyteinsky
+- increase HPB timeout and add reconnection logic ([#44](https://github.com/nextcloud/live_transcription/pull/44)) @kyteinsky
+- use HPB session id to remove targets from signaling messages ([#44](https://github.com/nextcloud/live_transcription/pull/44)) @kyteinsky
+- ensure peer connections are healthy on reconnect ([#44](https://github.com/nextcloud/live_transcription/pull/44)) @kyteinsky
+- pause sending transcript until the HPB connection re-establishes ([#44](https://github.com/nextcloud/live_transcription/pull/44)) @kyteinsky
 
 
 ## 1.2.2 - 2025-11-07
 
-### Fixed
-- pip's behaviour change with installing vosk's deps (#37) @kyteinsky
-
 ### Changed
-- allow https url scheme and add /spreed in hpb url (#36) @kyteinsky
-- improve install docs and LT_HPB_URL description (#35) @kyteinsky
+- allow https url scheme and add /spreed in hpb url ([#36](https://github.com/nextcloud/live_transcription/pull/36)) @kyteinsky
+- improve install docs and LT_HPB_URL description ([#35](https://github.com/nextcloud/live_transcription/pull/35)) @kyteinsky
+
+### Fixed
+- pip's behaviour change with installing vosk's deps ([#37](https://github.com/nextcloud/live_transcription/pull/37)) @kyteinsky
 
 
 ## 1.2.1 - 2025-11-05
 
-### Fixed
-- return gracefully on vosk connection error (#29) @kyteinsky
-
 ### Changed
 - bump max NC version to 33
+
+### Fixed
+- return gracefully on vosk connection error ([#29](https://github.com/nextcloud/live_transcription/pull/29)) @kyteinsky
 
 
 ## 1.2.0 - 2025-09-11
 
 ### Added
-- support sending partial transcript chunks (#22) @kyteinsky
+- support sending partial transcript chunks ([#22](https://github.com/nextcloud/live_transcription/pull/22)) @kyteinsky
 
 ### Fixed
-- better HPB error message handling (#26) @kyteinsky
-- slow down transcript sent to 300ms (#26) @kyteinsky
-- better shutdown process (#26) @kyteinsky
-- drop the "the", it's cleaner (#26) @kyteinsky
+- better HPB error message handling ([#26](https://github.com/nextcloud/live_transcription/pull/26)) @kyteinsky
+- slow down transcript sent to 300ms ([#26](https://github.com/nextcloud/live_transcription/pull/26)) @kyteinsky
+- better shutdown process ([#26](https://github.com/nextcloud/live_transcription/pull/26)) @kyteinsky
+- drop the "the", it's cleaner ([#26](https://github.com/nextcloud/live_transcription/pull/26)) @kyteinsky
 
 
 ## 1.1.2 - 2025-08-28
 
 ### Fixed
-- use LT_DISABLE_INTERNAL_VOSK in vosk server (#21) @kyteinsky
-- override nc_py_api's NPA_NC_CERT based on SKIP_CERT_VERIFY (#23) @kyteinsky
+- use LT_DISABLE_INTERNAL_VOSK in vosk server ([#21](https://github.com/nextcloud/live_transcription/pull/21)) @kyteinsky
+- override nc_py_api's NPA_NC_CERT based on SKIP_CERT_VERIFY ([#23](https://github.com/nextcloud/live_transcription/pull/23)) @kyteinsky
 
 
 ## 1.1.1 - 2025-08-28
 
 ### Fixed
-- pin nc_py_api to 0.20.2 (#19) @kyteinsky
+- pin nc_py_api to 0.20.2 ([#19](https://github.com/nextcloud/live_transcription/pull/19)) @kyteinsky
 
 
 ## 1.1.0 - 2025-08-28
 
 ### Added
-- Add reuse status badge (#6) @AndyScherzinger
-- add RTL support in language metadata (#7) @kyteinsky
-- add Arabic and Arabic Tunisian languages (#8) @kyteinsky
-- add langId in sent transcript signaling messages (#9) @kyteinsky
-- add app version to file logs (#13) @kyteinsky
-
-### Fixed
-- streamline error response in set-language call (#7) @kyteinsky
-- use ISO 639 language codes (#7) @kyteinsky
-- better error handling (#7) @kyteinsky
-- increase timeout for the model in vosk to load (#7) @kyteinsky
-- streamline error response in set-language call (#7) @kyteinsky
-- use the given language, not the global one in language switch (#14) @kyteinsky
-- use a stash list for unseen targets to be added (#13) @kyteinsky
-- load dotenv in the logger (#17) @kyteinsky
+- Add reuse status badge ([#6](https://github.com/nextcloud/live_transcription/pull/6)) @AndyScherzinger
+- add RTL support in language metadata ([#7](https://github.com/nextcloud/live_transcription/pull/7)) @kyteinsky
+- add Arabic and Arabic Tunisian languages ([#8](https://github.com/nextcloud/live_transcription/pull/8)) @kyteinsky
+- add langId in sent transcript signaling messages ([#9](https://github.com/nextcloud/live_transcription/pull/9)) @kyteinsky
+- add app version to file logs ([#13](https://github.com/nextcloud/live_transcription/pull/13)) @kyteinsky
 
 ### Changed
-- switch to Nextcloud session id for endpoints (#10) @kyteinsky
-- further clarify the env vars purpose in info.xml (#16) @kyteinsky
-- refactor out different classes and general utils into separate files (#17) @kyteinsky
+- switch to Nextcloud session id for endpoints ([#10](https://github.com/nextcloud/live_transcription/pull/10)) @kyteinsky
+- further clarify the env vars purpose in info.xml ([#16](https://github.com/nextcloud/live_transcription/pull/16)) @kyteinsky
+- refactor out different classes and general utils into separate files ([#17](https://github.com/nextcloud/live_transcription/pull/17)) @kyteinsky
+
+### Fixed
+- streamline error response in set-language call ([#7](https://github.com/nextcloud/live_transcription/pull/7)) @kyteinsky
+- use ISO 639 language codes ([#7](https://github.com/nextcloud/live_transcription/pull/7)) @kyteinsky
+- better error handling ([#7](https://github.com/nextcloud/live_transcription/pull/7)) @kyteinsky
+- increase timeout for the model in vosk to load ([#7](https://github.com/nextcloud/live_transcription/pull/7)) @kyteinsky
+- streamline error response in set-language call ([#7](https://github.com/nextcloud/live_transcription/pull/7)) @kyteinsky
+- use the given language, not the global one in language switch ([#14](https://github.com/nextcloud/live_transcription/pull/14)) @kyteinsky
+- use a stash list for unseen targets to be added ([#13](https://github.com/nextcloud/live_transcription/pull/13)) @kyteinsky
+- load dotenv in the logger ([#17](https://github.com/nextcloud/live_transcription/pull/17)) @kyteinsky
 
 
 ## 1.0.1 - 2025-08-07
 
 ### Fixed
-- fix: info.xml fix and add info.xml linter workflow (#3) @kyteinsky
+- fix: info.xml fix and add info.xml linter workflow ([#3](https://github.com/nextcloud/live_transcription/pull/3)) @kyteinsky
 
 
 ## 1.0.0 - 2025-08-06
