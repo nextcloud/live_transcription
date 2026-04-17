@@ -1,0 +1,310 @@
+repository_link: https://github.com/nextcloud/live_transcription
+title: Change Log
+description: All notable changes to this project will be documented in this file.
+markdown_preamble: |-
+  <!--
+    - SPDX-FileCopyrightText: 2025 Nextcloud GmbH and Nextcloud contributors
+    - SPDX-License-Identifier: AGPL-3.0-or-later
+  -->
+  # Change Log
+  All notable changes to this project will be documented in this file.
+
+  The format is based on [Keep a Changelog](http://keepachangelog.com/)
+  and this project adheres to [Semantic Versioning](http://semver.org/).
+release_agent:
+  ignore_commits:
+  - author: "^pre-commit-ci\\[bot\\]$"
+  - author: "^Nextcloud-bot$"
+  - email: bot@nextcloud.com
+  - author: "^dependabot\\[bot\\]$"
+  - message: "^chore\\(changelog\\):"
+entries:
+- version: 2.1.0
+  release_date: '2026-03-03'
+  sections:
+  - name: Added
+    items:
+    - text: add support for NC 34
+      authors: []
+      issue_number:
+  - name: Changed
+    items:
+    - text: 'perf(OCPTranslator): Speedup translations'
+      authors:
+      - marcelklehr
+      issue_number: 61
+    - text: switch to staticmethod for task types for no room requirement
+      authors:
+      - kyteinsky
+      issue_number: 66
+  - name: Fixed
+    items:
+    - text: Make is_language_pair_supported actually return True
+      authors:
+      - marcelklehr
+      issue_number: 60
+    - text: use the larger LANGUAGE_MAP and fallback to lang name
+      authors:
+      - kyteinsky
+      issue_number: 66
+    - text: fix ocp_translator detect_language detection
+      authors:
+      - kyteinsky
+      issue_number: 66
+    - text: memory leak improvements
+      authors:
+      - kyteinsky
+      issue_number: 67
+- version: 2.0.0
+  release_date: '2026-01-20'
+  sections:
+  - name: Added
+    items:
+    - text: 'feat: Live translation'
+      authors: []
+      issue_number:
+  - name: Breaking changes
+    items:
+    - text: Dropped support for NC < 33
+      authors: []
+      issue_number:
+- version: 1.3.0
+  release_date: '2025-12-02'
+  sections:
+  - name: Added
+    items:
+    - text: add /capabilities endpoint
+      authors:
+      - kyteinsky
+      issue_number: 47
+  - name: Fixed
+    items:
+    - text: clear reconnection task in the HPB close()
+      authors:
+      - kyteinsky
+      issue_number: 48
+    - text: remove redundant keep_peers arg in HPB close()
+      authors:
+      - kyteinsky
+      issue_number: 48
+    - text: delay 2 secs between reconnection tries
+      authors:
+      - kyteinsky
+      issue_number: 48
+    - text: conditional reconnection
+      authors:
+      - kyteinsky
+      issue_number: 48
+    - text: catch HPB server connection exceptions
+      authors:
+      - kyteinsky
+      issue_number: 48
+    - text: join the call after short resume
+      authors:
+      - kyteinsky
+      issue_number: 48
+    - text: continue with normal ops if short resume succeeds
+      authors:
+      - kyteinsky
+      issue_number: 48
+- version: 1.2.3
+  release_date: '2025-11-25'
+  sections:
+  - name: Fixed
+    items:
+    - text: pure asyncio locks
+      authors:
+      - kyteinsky
+      issue_number: 44
+    - text: prevent race condition of start when a client is shutting down
+      authors:
+      - kyteinsky
+      issue_number: 44
+    - text: increase HPB timeout and add reconnection logic
+      authors:
+      - kyteinsky
+      issue_number: 44
+    - text: use HPB session id to remove targets from signaling messages
+      authors:
+      - kyteinsky
+      issue_number: 44
+    - text: ensure peer connections are healthy on reconnect
+      authors:
+      - kyteinsky
+      issue_number: 44
+    - text: pause sending transcript until the HPB connection re-establishes
+      authors:
+      - kyteinsky
+      issue_number: 44
+- version: 1.2.2
+  release_date: '2025-11-07'
+  sections:
+  - name: Changed
+    items:
+    - text: allow https url scheme and add /spreed in hpb url
+      authors:
+      - kyteinsky
+      issue_number: 36
+    - text: improve install docs and LT_HPB_URL description
+      authors:
+      - kyteinsky
+      issue_number: 35
+  - name: Fixed
+    items:
+    - text: pip's behaviour change with installing vosk's deps
+      authors:
+      - kyteinsky
+      issue_number: 37
+- version: 1.2.1
+  release_date: '2025-11-05'
+  sections:
+  - name: Changed
+    items:
+    - text: bump max NC version to 33
+      authors: []
+      issue_number:
+  - name: Fixed
+    items:
+    - text: return gracefully on vosk connection error
+      authors:
+      - kyteinsky
+      issue_number: 29
+- version: 1.2.0
+  release_date: '2025-09-11'
+  sections:
+  - name: Added
+    items:
+    - text: support sending partial transcript chunks
+      authors:
+      - kyteinsky
+      issue_number: 22
+  - name: Fixed
+    items:
+    - text: better HPB error message handling
+      authors:
+      - kyteinsky
+      issue_number: 26
+    - text: slow down transcript sent to 300ms
+      authors:
+      - kyteinsky
+      issue_number: 26
+    - text: better shutdown process
+      authors:
+      - kyteinsky
+      issue_number: 26
+    - text: drop the "the", it's cleaner
+      authors:
+      - kyteinsky
+      issue_number: 26
+- version: 1.1.2
+  release_date: '2025-08-28'
+  sections:
+  - name: Fixed
+    items:
+    - text: use LT_DISABLE_INTERNAL_VOSK in vosk server
+      authors:
+      - kyteinsky
+      issue_number: 21
+    - text: override nc_py_api's NPA_NC_CERT based on SKIP_CERT_VERIFY
+      authors:
+      - kyteinsky
+      issue_number: 23
+- version: 1.1.1
+  release_date: '2025-08-28'
+  sections:
+  - name: Fixed
+    items:
+    - text: pin nc_py_api to 0.20.2
+      authors:
+      - kyteinsky
+      issue_number: 19
+- version: 1.1.0
+  release_date: '2025-08-28'
+  sections:
+  - name: Added
+    items:
+    - text: Add reuse status badge
+      authors:
+      - AndyScherzinger
+      issue_number: 6
+    - text: add RTL support in language metadata
+      authors:
+      - kyteinsky
+      issue_number: 7
+    - text: add Arabic and Arabic Tunisian languages
+      authors:
+      - kyteinsky
+      issue_number: 8
+    - text: add langId in sent transcript signaling messages
+      authors:
+      - kyteinsky
+      issue_number: 9
+    - text: add app version to file logs
+      authors:
+      - kyteinsky
+      issue_number: 13
+  - name: Changed
+    items:
+    - text: switch to Nextcloud session id for endpoints
+      authors:
+      - kyteinsky
+      issue_number: 10
+    - text: further clarify the env vars purpose in info.xml
+      authors:
+      - kyteinsky
+      issue_number: 16
+    - text: refactor out different classes and general utils into separate files
+      authors:
+      - kyteinsky
+      issue_number: 17
+  - name: Fixed
+    items:
+    - text: streamline error response in set-language call
+      authors:
+      - kyteinsky
+      issue_number: 7
+    - text: use ISO 639 language codes
+      authors:
+      - kyteinsky
+      issue_number: 7
+    - text: better error handling
+      authors:
+      - kyteinsky
+      issue_number: 7
+    - text: increase timeout for the model in vosk to load
+      authors:
+      - kyteinsky
+      issue_number: 7
+    - text: streamline error response in set-language call
+      authors:
+      - kyteinsky
+      issue_number: 7
+    - text: use the given language, not the global one in language switch
+      authors:
+      - kyteinsky
+      issue_number: 14
+    - text: use a stash list for unseen targets to be added
+      authors:
+      - kyteinsky
+      issue_number: 13
+    - text: load dotenv in the logger
+      authors:
+      - kyteinsky
+      issue_number: 17
+- version: 1.0.1
+  release_date: '2025-08-07'
+  sections:
+  - name: Fixed
+    items:
+    - text: 'fix: info.xml fix and add info.xml linter workflow'
+      authors:
+      - kyteinsky
+      issue_number: 3
+- version: 1.0.0
+  release_date: '2025-08-06'
+  sections:
+  - name: Added
+    items:
+    - text: Initial release of the app.
+      authors: []
+      issue_number:
