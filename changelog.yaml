@@ -19,6 +19,15 @@ release_agent:
   - author: "^dependabot\\[bot\\]$"
   - message: "^chore\\(changelog\\):"
 entries:
+- version: 2.1.1
+  release_date: '2026-04-17'
+  sections:
+  - name: Fixed
+    items:
+    - text: get HPB settings in a lazy way to not crash on startup
+      authors:
+      - kyteinsky
+      issue_number: 75
 - version: 2.1.0
   release_date: '2026-03-03'
   sections:
