@@ -45,6 +45,7 @@ from models import VOSK_SUPPORTED_LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers, setup_nextcloud_logging
 from service import Application
+from utils import get_hpb_settings
 
 LOGGER_CONFIG_NAME = "../../logger_config.yaml"
 LOGGER = logging.getLogger("lt")
@@ -67,6 +68,10 @@ async def lifespan(app: FastAPI):
 	nc = NextcloudApp()
 	if nc.enabled_state:
 		ENABLED.set()
+		try:
+			SERVICE.hpb_settings = get_hpb_settings()
+		except Exception as e:
+			LOGGER.warning("Failed to get the HPB settings when app is enabled", exc_info=e)
 	LOGGER.info("App is %s on startup", "enabled" if ENABLED.is_set() else "disabled")
 	yield
 
@@ -283,6 +288,10 @@ def enabled_handler(enabled: bool, nc: NextcloudApp | AsyncNextcloudApp) -> str:
 	print(f"enabled={enabled}", flush=True)
 	if enabled:
 		ENABLED.set()
+		try:
+			SERVICE.hpb_settings = get_hpb_settings()
+		except Exception as e:
+			LOGGER.warning("Failed to get the HPB settings when app is enabled", exc_info=e)
 	else:
 		ENABLED.clear()
 	return ""
