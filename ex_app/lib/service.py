@@ -7,7 +7,7 @@ import asyncio
 import logging
 
 from constants import HPB_SHUTDOWN_TIMEOUT, MAX_CONNECT_TRIES
-from livetypes import LanguageSetRequest, SigConnectResult, SpreedClientException, TranscribeRequest
+from livetypes import HPBSettings, LanguageSetRequest, SigConnectResult, SpreedClientException, TranscribeRequest
 from spreed_client import SpreedClient
 from utils import get_hpb_settings
 
@@ -16,7 +16,7 @@ LOGGER = logging.getLogger("lt.service")
 
 class Application:
 	def __init__(self) -> None:
-		self.hpb_settings = get_hpb_settings()
+		self.hpb_settings: HPBSettings | None = None
 		self.spreed_clients: dict[str, SpreedClient] = {}
 		self.spreed_clients_lock = asyncio.Lock()
 		self.__task_bin: set[asyncio.Task] = set()
@@ -33,7 +33,19 @@ class Application:
 					break
 		await self.transcript_req(req, deferred=True)
 
-	async def transcript_req(self, req: TranscribeRequest, deferred: bool = False) -> None:
+	async def transcript_req(self, req: TranscribeRequest, deferred: bool = False) -> None:  # noqa: C901
+		if self.hpb_settings is None:
+			try:
+				self.hpb_settings = get_hpb_settings()
+			except Exception as e:
+				LOGGER.error(
+					"No HPB settings found. Either the app is not enabled or HPB settings fetch failed.",
+					exc_info=e,
+				)
+				raise SpreedClientException(
+					"No HPB settings found. Either the app is not enabled or HPB settings fetch failed."
+				) from e
+
 		async with self.spreed_clients_lock:
 			if req.roomToken in self.spreed_clients:
 				if self.spreed_clients[req.roomToken].defunct.is_set():
