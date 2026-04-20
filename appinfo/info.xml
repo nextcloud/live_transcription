@@ -43,7 +43,7 @@ IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are requi
 			<variable>
 				<name>LT_INTERNAL_SECRET</name>
 				<display-name>Internal secret of the high-performance backend</display-name>
-				<description>Internal secret used to authenticate with the high-performance backend. This is not the same as the shared secret in the admin settings of Talk.</description>
+				<description>Internal secret used to authenticate with the high-performance backend. This is the internal secret from the HPB and not the shared secret entered on the Nextcloud Server in the admin settings of Talk. It is set as "internalsecret = ..." in the server.conf file of the Talk Signaling HPB.</description>
 			</variable>
 			<variable>
 				<name>LT_VOSK_SERVER_URL</name>
