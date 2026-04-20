@@ -10,6 +10,7 @@ import logging
 import logging.config
 import logging.handlers
 import os
+import traceback
 from time import gmtime
 
 from ruamel.yaml import YAML
@@ -64,8 +65,14 @@ class JSONFormatter(logging.Formatter):
 			).isoformat(),
 			"version": os.getenv("APP_VERSION", "unknown"),
 		}
-		if record.exc_info is not None:
-			always_fields["exc_info"] = self.formatException(record.exc_info)
+
+		if isinstance(record.exc_info, bool):
+			always_fields["exc_info"] = traceback.format_exc()
+		elif record.exc_info is not None:
+			try:
+				always_fields["exc_info"] = self.formatException(record.exc_info)
+			except Exception:
+				always_fields["exc_info"] = str(record.exc_info)
 
 		if record.stack_info is not None:
 			always_fields["stack_info"] = self.formatStack(record.stack_info)
