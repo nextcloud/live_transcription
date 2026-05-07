@@ -12,10 +12,11 @@ import logging.handlers
 import os
 import traceback
 from time import gmtime
+from typing import Literal
 
 from ruamel.yaml import YAML
 
-__all__ = ["JSONFormatter", "setup_logging"]
+__all__ = ["ExtraFormatter", "JSONFormatter", "setup_logging"]
 
 LOG_RECORD_BUILTIN_ATTRS = {
 	"args",
@@ -42,6 +43,32 @@ LOG_RECORD_BUILTIN_ATTRS = {
 	"threadName",
 	"taskName",
 }
+
+
+def _get_record_extra(record: logging.LogRecord) -> dict[str, object]:
+	return {
+		key: val
+		for key, val in record.__dict__.items()
+		if key not in LOG_RECORD_BUILTIN_ATTRS
+	}
+
+
+class ExtraFormatter(logging.Formatter):
+	def __init__(
+		self,
+		format: str | None = None,  # noqa: A002
+		datefmt: str | None = None,
+		style: Literal["%", "{", "$"] = "%",
+		validate: bool = True,
+		*,
+		defaults: dict[str, object] | None = None,
+	):
+		super().__init__(fmt=format, datefmt=datefmt, style=style, validate=validate, defaults=defaults)
+
+	def format(self, record: logging.LogRecord) -> str:
+		record_copy = logging.makeLogRecord(record.__dict__.copy())
+		record_copy.extra = json.dumps(_get_record_extra(record), default=str, sort_keys=True)
+		return super().format(record_copy)
 
 
 class JSONFormatter(logging.Formatter):
@@ -85,9 +112,9 @@ class JSONFormatter(logging.Formatter):
 		}
 		message.update(always_fields)
 
-		for key, val in record.__dict__.items():
-			if key not in LOG_RECORD_BUILTIN_ATTRS:
-				message[key] = val
+		extra_fields = _get_record_extra(record)
+		for key, val in extra_fields.items():
+			message[key] = val
 
 		return message
 

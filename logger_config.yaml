@@ -9,7 +9,8 @@ disable_existing_loggers: false
 
 formatters:
   default:
-    format: '%(asctime)s: [%(levelname)s|%(module)s]: %(message)s'
+    (): logger.ExtraFormatter
+    format: '%(asctime)s: [%(levelname)s|%(module)s]: %(message)s %(extra)s'
     datefmt: '%Y-%m-%dT%H:%M:%S%z'
 
   json:
@@ -29,7 +30,7 @@ formatters:
 handlers:
   stderr:
     class: logging.StreamHandler
-    level: WARNING
+    level: INFO
     formatter: default
     stream: ext://sys.stderr
 
@@ -50,7 +51,7 @@ loggers:
     - file_json
 
   lt:
-    level: WARNING
+    level: INFO
     handlers:
     - stderr
     - file_json
