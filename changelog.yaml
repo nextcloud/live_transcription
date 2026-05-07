@@ -19,6 +19,25 @@ release_agent:
   - author: "^dependabot\\[bot\\]$"
   - message: "^chore\\(changelog\\):"
 entries:
+- version: 2.1.2
+  release_date: '2026-05-07'
+  sections:
+  - name: Changed
+    items:
+    - text: improve internal secret description
+      authors:
+      - kyteinsky
+      issue_number: 81
+  - name: Fixed
+    items:
+    - text: handle exc_info type errors
+      authors:
+      - kyteinsky
+      issue_number: 80
+    - text: improve logging at important places
+      authors:
+      - kyteinsky
+      issue_number: 82
 - version: 2.1.1
   release_date: '2026-04-17'
   sections:
