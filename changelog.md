@@ -8,6 +8,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## 2.1.2 - 2026-05-07
+
+### Changed
+- improve internal secret description ([#81](https://github.com/nextcloud/live_transcription/pull/81)) @kyteinsky
+
+### Fixed
+- handle exc_info type errors ([#80](https://github.com/nextcloud/live_transcription/pull/80)) @kyteinsky
+- improve logging at important places ([#82](https://github.com/nextcloud/live_transcription/pull/82)) @kyteinsky
+
+
 ## 2.1.1 - 2026-04-17
 
 ### Fixed
