@@ -147,9 +147,8 @@ class SpreedClient:
 
 			if message.get("type") == "hello":
 				self.sessionid = message["hello"]["sessionid"]
-				LOGGER.debug("Resumed connection with new session ID", extra={
+				LOGGER.info("Resumed connection with new session ID", extra={
 					"sessionid": self.sessionid,
-					"resumeid": self.resumeid,
 					"room_token": self.room_token,
 					"tag": "short_resume",
 				})
@@ -688,7 +687,7 @@ class SpreedClient:
 
 		with suppress(Exception):
 			if self._server and self._server.state == WsState.OPEN:
-				LOGGER.debug("Closing WebSocket connection", extra={
+				LOGGER.info("Closing WebSocket connection for room", extra={
 					"room_token": self.room_token,
 					"tag": "connection",
 				})
@@ -740,7 +739,7 @@ class SpreedClient:
 			session_id = self.nc_sid_map[nc_session_id]
 			if session_id not in self.targets:
 				self.targets[session_id] = Target()
-				LOGGER.debug("Added target", extra={
+				LOGGER.info("Added transcript target", extra={
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
@@ -749,7 +748,7 @@ class SpreedClient:
 					"tag": "target",
 				})
 			else:
-				LOGGER.debug("Target already exists", extra={
+				LOGGER.info("Transcript target already exists", extra={
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
@@ -770,7 +769,7 @@ class SpreedClient:
 		async with self.target_lock:
 			self._nc_sid_wait_stash.pop(nc_session_id, None)
 			if nc_session_id not in self.nc_sid_map:
-				LOGGER.debug("HPB session ID corresponding to Nextcloud session ID '%s' not found",
+				LOGGER.info("HPB session ID corresponding to Nextcloud session ID '%s' not found",
 					nc_session_id,
 					extra={
 						"nc_session_id": nc_session_id,
@@ -782,7 +781,7 @@ class SpreedClient:
 
 			session_id = self.nc_sid_map[nc_session_id]
 			if session_id in self.targets:
-				LOGGER.debug("Removed target", extra={
+				LOGGER.info("Removed transcript target", extra={
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
@@ -796,7 +795,7 @@ class SpreedClient:
 						self._deferred_close_task.cancel()
 					self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
 			else:
-				LOGGER.debug("Target does not exist", extra={
+				LOGGER.info("Transcript target does not exist", extra={
 					"session_id": session_id,
 					"nc_session_id": nc_session_id,
 					"targets": self.targets,
@@ -808,7 +807,7 @@ class SpreedClient:
 	async def remove_target_hpb_sid(self, session_id: str):
 		async with self.target_lock:
 			if session_id in self.targets:
-				LOGGER.debug("Removed target", extra={
+				LOGGER.info("Removed transcript target", extra={
 					"session_id": session_id,
 					"targets": self.targets,
 					"room_lang_id": self.room_lang_id,
@@ -821,7 +820,7 @@ class SpreedClient:
 						self._deferred_close_task.cancel()
 					self._deferred_close_task = asyncio.create_task(self.maybe_leave_call())
 			else:
-				LOGGER.debug("Target does not exist", extra={
+				LOGGER.info("Transcript target does not exist", extra={
 					"session_id": session_id,
 					"targets": self.targets,
 					"room_lang_id": self.room_lang_id,
@@ -893,14 +892,14 @@ class SpreedClient:
 				and message["event"]["target"] == "participants"
 				and message["event"]["type"] == "update"
 			):
-				LOGGER.debug("Participants update received", extra={
+				LOGGER.info("Participants update received", extra={
 					"room_token": self.room_token,
 					"recv_message": message,
 					"tag": "participants",
 				})
 
 				if message["event"]["update"].get("all") and message["event"]["update"].get("incall") == 0:
-					LOGGER.debug("Call ended for everyone, closing connection", extra={
+					LOGGER.info("Call ended for everyone, closing connection", extra={
 						"room_token": self.room_token,
 						"recv_message": message,
 						"tag": "participants",
@@ -918,7 +917,7 @@ class SpreedClient:
 						continue
 
 					if user_desc["inCall"] == CallFlag.DISCONNECTED:
-						LOGGER.debug("User disconnected", extra={
+						LOGGER.info("User disconnected", extra={
 							"user_desc": user_desc,
 							"room_token": self.room_token,
 							"tag": "participants",
@@ -958,7 +957,7 @@ class SpreedClient:
 
 					# user connected with audio
 					if (user_desc["inCall"] & CallFlag.IN_CALL and user_desc["inCall"] & CallFlag.WITH_AUDIO):
-						LOGGER.debug("User joined with audio", extra={
+						LOGGER.info("User joined with audio", extra={
 							"user_desc": user_desc,
 							"room_token": self.room_token,
 							"tag": "participants",
@@ -969,7 +968,7 @@ class SpreedClient:
 								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "closed"
 								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "failed"
 							):
-								LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
+								LOGGER.info("Peer connection for user already exists, skipping offer request", extra={
 									"user_desc": user_desc,
 									"room_token": self.room_token,
 									"tag": "participants",
@@ -993,7 +992,7 @@ class SpreedClient:
 						users_update[transcriber_index].get("inCall") & CallFlag.IN_CALL
 						and users_update[transcriber_index^1].get("inCall") == CallFlag.DISCONNECTED
 					):
-						LOGGER.debug("Last user left the call, closing connection", extra={
+						LOGGER.info("Last user left the call, closing connection", extra={
 							"room_token": self.room_token,
 							"transcriber_session_id": users_update[transcriber_index].get("sessionId"),
 							"tag": "participants",
@@ -1028,7 +1027,7 @@ class SpreedClient:
 				continue
 
 			if message["type"] == "bye":
-				LOGGER.debug("Received bye message, closing connection", extra={
+				LOGGER.info("Received bye message, closing connection", extra={
 					"room_token": self.room_token,
 					"recv_message": message,
 					"tag": "bye",
@@ -1106,7 +1105,7 @@ class SpreedClient:
 
 		@pc.on("connectionstatechange")
 		async def on_connectionstatechange():
-			LOGGER.debug("Peer connection state changed", extra={
+			LOGGER.info("Peer connection state changed", extra={
 				"session_id": spkr_sid,
 				"connection_state": pc.connectionState,
 				"room_token": weakself().room_token if weakself() else None,
@@ -1123,7 +1122,7 @@ class SpreedClient:
 				return
 
 			if pc.connectionState in ("failed", "closed"):
-				LOGGER.debug("Peer connection for %s is %s", spkr_sid, pc.connectionState, extra={
+				LOGGER.warning("Peer connection state for '%s' is '%s'", spkr_sid, pc.connectionState, extra={
 					"session_id": spkr_sid,
 					"connection_state": pc.connectionState,
 					"room_token": weakself().room_token,
@@ -1180,7 +1179,7 @@ class SpreedClient:
 							)
 						return
 
-					LOGGER.debug(
+					LOGGER.info(
 						"Started transcriber for %s in %s",
 						spkr_sid,
 						LANGUAGE_MAP.get(weakself().room_lang_id).name,
@@ -1204,6 +1203,7 @@ class SpreedClient:
 		await self.send_offer_answer(message["message"]["data"]["from"], message["message"]["data"]["sid"], answer.sdp)
 		LOGGER.debug("Sent answer for offer from %s", spkr_sid, extra={
 			"session_id": spkr_sid,
+			"answer": answer,
 			"room_token": self.room_token,
 			"tag": "offer",
 		})
@@ -1226,13 +1226,17 @@ class SpreedClient:
 			"tag": "offer",
 		})
 
+		candidates = []
 		for line in local_sdp.splitlines():
 			if line.startswith("a=candidate:"):
+				candidates.append(line[2:])
 				await self.send_candidate(
 					message["message"]["sender"]["sessionid"],
 					message["message"]["data"]["sid"],
 					line[2:],
 				)
+
+		LOGGER.info("Sent candidates to the peer", extra={ "candidates": candidates })
 
 	async def set_language(self, lang_id: str):
 		excs = []
