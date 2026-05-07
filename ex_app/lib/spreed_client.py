@@ -22,6 +22,7 @@ from constants import (
 	CALL_LEAVE_TIMEOUT,
 	HPB_PING_TIMEOUT,
 	HPB_SHUTDOWN_TIMEOUT,
+	ICE_GATHERING_TIMEOUT,
 	MAX_TRANSCRIPT_SEND_TIMEOUT,
 	MAX_TRANSLATION_SEND_TIMEOUT,
 	MSG_RECEIVE_TIMEOUT,
@@ -1206,6 +1207,16 @@ class SpreedClient:
 			"room_token": self.room_token,
 			"tag": "offer",
 		})
+
+		# @pc.on("icecandidate") may not work as well so we wait for the gathering to complete
+		# https://github.com/aiortc/aiortc/issues/1344
+		waited_for = 0
+		while pc.iceGatheringState != "complete" and waited_for <= ICE_GATHERING_TIMEOUT:
+			await asyncio.sleep(0.2)
+			waited_for += 0.2
+
+		if waited_for > ICE_GATHERING_TIMEOUT and pc.iceGatheringState != "complete":
+			LOGGER.warning("Timed out waiting for ice gathering to complete, continuing with the peer connection still")
 
 		local_sdp = pc.localDescription.sdp
 		LOGGER.debug("Local SDP for %s:", spkr_sid, extra={

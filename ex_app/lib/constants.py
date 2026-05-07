@@ -19,6 +19,7 @@ SEND_TIMEOUT = 10  # timeout for sending transcripts and translations
 # factor by which to increase the timeout on each timeout occurrence for transcripts and translations
 TIMEOUT_INCREASE_FACTOR = 1.5
 CACHE_TTL = 15 * 60  # cache values for 15 minutes
+ICE_GATHERING_TIMEOUT = 30  # seconds
 
 # todo
 MAX_TRANSCRIPT_SEND_TIMEOUT = 30
