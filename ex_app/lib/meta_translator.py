@@ -86,7 +86,7 @@ class MetaTranslator:
 				self.translators[target_lang_id] = OCPTranslator(self.room_lang_id, target_lang_id, self.room_token)
 
 			self.translators[target_lang_id].add_session_id(nc_session_id)
-			LOGGER.debug("Added NC session id to the translator", extra={
+			LOGGER.info("Added NC session id to the translator", extra={
 				"origin_language": self.room_lang_id,
 				"target_language": target_lang_id,
 				"nc_session_id": nc_session_id,
@@ -129,7 +129,7 @@ class MetaTranslator:
 	async def remove_translator(self, nc_session_id: str):
 		async with self.sid_translation_lang_map_lock:
 			if nc_session_id not in self.sid_translation_lang_map:
-				LOGGER.info("NC session id not found in the translation map when trying to remove it", extra={
+				LOGGER.debug("NC session id not found in the translation map when trying to remove it", extra={
 					"nc_session_id": nc_session_id,
 					"room_lang_id": self.room_lang_id,
 					"tag": "translate",
@@ -138,7 +138,7 @@ class MetaTranslator:
 			target_lang_id = self.sid_translation_lang_map[nc_session_id]
 			await self.__remove_translator_int(target_lang_id, nc_session_id)
 			del self.sid_translation_lang_map[nc_session_id]
-			LOGGER.debug("Removed NC session id from the translation map", extra={
+			LOGGER.info("Removed NC session id from the translation map", extra={
 				"nc_session_id": nc_session_id,
 				"room_lang_id": self.room_lang_id,
 				"tag": "translate",
@@ -184,7 +184,7 @@ class MetaTranslator:
 		self.task = None
 
 	async def __run_translation_task(self):
-		LOGGER.debug("Starting meta translation task", extra={
+		LOGGER.info("Starting meta translation task", extra={
 			"room_lang_id": self.room_lang_id,
 			"tag": "translate",
 		})

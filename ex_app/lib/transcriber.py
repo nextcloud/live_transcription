@@ -107,7 +107,7 @@ class VoskTranscriber:
 			})
 			return
 
-		LOGGER.debug("Switching Vosk language from %s to %s",
+		LOGGER.info("Switching Vosk language from %s to %s",
 			LANGUAGE_MAP[self.__language].name, LANGUAGE_MAP[language].name,
 			extra={
 				"session_id": self.__session_id,
