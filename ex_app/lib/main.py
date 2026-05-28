@@ -66,12 +66,12 @@ async def lifespan(app: FastAPI):
 	set_handlers(app, enabled_handler, models_to_fetch=MODELS_TO_FETCH)
 	SERVICE = Application()
 	nc = NextcloudApp()
-	if nc.enabled_state:
-		ENABLED.set()
-		try:
+	ENABLED.set()  # Always set enabled to allow health checks to pass
+	try:
+		if nc.enabled_state:
 			SERVICE.hpb_settings = get_hpb_settings()
-		except Exception as e:
-			LOGGER.warning("Failed to get the HPB settings when app is enabled", exc_info=e)
+	except Exception as e:
+		LOGGER.warning("Failed to get the HPB settings when app is enabled", exc_info=e)
 	LOGGER.info("App is %s on startup", "enabled" if ENABLED.is_set() else "disabled")
 	yield
 
