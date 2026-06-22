@@ -952,8 +952,6 @@ class SpreedClient:
 							"tag": "target",
 						})
 						await self.add_target(user_desc["nextcloudSessionId"])
-						async with self.target_lock:
-							self._nc_sid_wait_stash.pop(user_desc["nextcloudSessionId"], None)
 
 					# user connected with audio
 					if (user_desc["inCall"] & CallFlag.IN_CALL and user_desc["inCall"] & CallFlag.WITH_AUDIO):
