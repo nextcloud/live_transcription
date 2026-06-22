@@ -1316,7 +1316,6 @@ class SpreedClient:
 					timeout_count = 0
 				continue
 
-				continue
 			except asyncio.CancelledError:
 				LOGGER.debug("Transcript consumer task cancelled", extra={
 					"room_token": self.room_token,
