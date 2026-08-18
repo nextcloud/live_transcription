@@ -1119,7 +1119,7 @@ class SpreedClient:
 				})
 				return
 
-			if pc.connectionState in ("failed", "closed"):
+			if pc.connectionState == "failed":
 				LOGGER.warning("Peer connection state for '%s' is '%s'", spkr_sid, pc.connectionState, extra={
 					"session_id": spkr_sid,
 					"connection_state": pc.connectionState,
