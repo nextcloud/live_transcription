@@ -8,6 +8,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## 2.1.3 - 2026-08-19
+
+### Changed
+- add NC 35 support ([#86](https://github.com/nextcloud/live_transcription/pull/86)) @kyteinsky
+- minor fixes ([#90](https://github.com/nextcloud/live_transcription/pull/90)) @kyteinsky
+
+### Fixed
+- remove redundant lines ([#87](https://github.com/nextcloud/live_transcription/pull/87)) @kyteinsky
+
+
 ## 2.1.2 - 2026-05-07
 
 ### Changed
