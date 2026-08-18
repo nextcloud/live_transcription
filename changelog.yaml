@@ -19,6 +19,25 @@ release_agent:
   - author: "^dependabot\\[bot\\]$"
   - message: "^chore\\(changelog\\):"
 entries:
+- version: 2.1.3
+  release_date: '2026-08-19'
+  sections:
+  - name: Changed
+    items:
+    - text: add NC 35 support
+      authors:
+      - kyteinsky
+      issue_number: 86
+    - text: minor fixes
+      authors:
+      - kyteinsky
+      issue_number: 90
+  - name: Fixed
+    items:
+    - text: remove redundant lines
+      authors:
+      - kyteinsky
+      issue_number: 87
 - version: 2.1.2
   release_date: '2026-05-07'
   sections:
