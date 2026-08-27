@@ -1259,6 +1259,7 @@ class SpreedClient:
 		if len(excs) == 1:
 			raise VoskException(f"Failed to set language for one transcriber: {excs[0]}", retcode=500)
 		self.room_lang_id = lang_id
+		await self.meta_translator.set_room_lang_id(lang_id)
 
 	async def transcipt_queue_consumer(self):
 		"""Consume transcripts from the queue and send them to the server."""
