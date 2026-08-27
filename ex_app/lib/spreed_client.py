@@ -61,6 +61,12 @@ class PeerConnection:
 	pc: RTCPeerConnection
 
 
+# How long to wait for an offer after sending a "requestoffer" before allowing
+# another request for the same session. Sending a second "requestoffer" makes the
+# HPB re-create the subscriber handle, which changes the subscriber sid.
+OFFER_REQUEST_TIMEOUT = 10.0
+
+
 class SpreedClient:
 	def __init__(
 		self,
@@ -74,6 +80,10 @@ class SpreedClient:
 		self._monitor: asyncio.Task | None = None
 		self.peer_connections: dict[str, PeerConnection] = {}
 		self.peer_connection_lock = asyncio.Lock()
+		# sessions with an in-flight "requestoffer": {session_id: request time}
+		self._offer_requested: dict[str, float] = {}
+		# most recent subscriber sid announced by the HPB: {session_id: sid}
+		self._current_sid: dict[str, str] = {}
 		self.targets: dict[str, Target] = {}
 		self.target_lock = asyncio.Lock()
 		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
@@ -929,6 +939,9 @@ class SpreedClient:
 								await self.transcribers[user_desc["sessionId"]].shutdown()
 								del self.transcribers[user_desc["sessionId"]]
 						await self.remove_target_hpb_sid(user_desc["sessionId"])
+						async with self.peer_connection_lock:
+							self._offer_requested.pop(user_desc["sessionId"], None)
+							self._current_sid.pop(user_desc["sessionId"], None)
 						async with self.target_lock:
 							# "nextcloudSessionId" may not be present in the user_desc in call disconnects
 							self.nc_sid_map.pop(user_desc.get("nextcloudSessionId", ""), None)
@@ -972,6 +985,18 @@ class SpreedClient:
 									"tag": "participants",
 								})
 								continue
+							last_request = self._offer_requested.get(user_desc["sessionId"])
+							if (
+								last_request is not None
+								and asyncio.get_running_loop().time() - last_request < OFFER_REQUEST_TIMEOUT
+							):
+								LOGGER.info("Offer request already in flight, skipping duplicate", extra={
+									"user_desc": user_desc,
+									"room_token": self.room_token,
+									"tag": "participants",
+								})
+								continue
+							self._offer_requested[user_desc["sessionId"]] = asyncio.get_running_loop().time()
 						await self.send_offer_request(user_desc["sessionId"])
 						continue
 
@@ -1070,6 +1095,12 @@ class SpreedClient:
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
 		async with self.peer_connection_lock:
+			self._offer_requested.pop(spkr_sid, None)
+			# adopt the newest sid even for offers we skip below, so that the answer
+			# and the trickled candidates are not stamped with a stale subscriber sid
+			new_sid = message["message"]["data"].get("sid")
+			if new_sid:
+				self._current_sid[spkr_sid] = new_sid
 			if (
 				spkr_sid in self.peer_connections
 				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
@@ -1129,6 +1160,8 @@ class SpreedClient:
 				async with weakself().peer_connection_lock:
 					if spkr_sid in weakself().peer_connections:
 						del weakself().peer_connections[spkr_sid]
+					weakself()._offer_requested.pop(spkr_sid, None)
+					weakself()._current_sid.pop(spkr_sid, None)
 
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
@@ -1198,7 +1231,11 @@ class SpreedClient:
 
 		answer = await pc.createAnswer()
 		await pc.setLocalDescription(answer)
-		await self.send_offer_answer(message["message"]["data"]["from"], message["message"]["data"]["sid"], answer.sdp)
+		await self.send_offer_answer(
+			message["message"]["data"]["from"],
+			self._current_sid.get(spkr_sid) or message["message"]["data"]["sid"],
+			answer.sdp,
+		)
 		LOGGER.debug("Sent answer for offer from %s", spkr_sid, extra={
 			"session_id": spkr_sid,
 			"answer": answer,
@@ -1230,7 +1267,7 @@ class SpreedClient:
 				candidates.append(line[2:])
 				await self.send_candidate(
 					message["message"]["sender"]["sessionid"],
-					message["message"]["data"]["sid"],
+					self._current_sid.get(spkr_sid) or message["message"]["data"]["sid"],
 					line[2:],
 				)
 
