@@ -104,7 +104,10 @@ class SpreedClient:
 
 		nc = NextcloudApp()
 		self._websocket_url = sanitize_websocket_url(os.environ["LT_HPB_URL"])
-		self._backendURL = nc.app_cfg.endpoint + "/ocs/v2.php/apps/spreed/api/v3/signaling/backend"
+		# The signaling server appends the OCS signaling backend path itself
+		# (ClientSession.ParsedBackendOcsUrl), including picking v1 or v3 based on
+		# the "signaling-v3" capability, so this has to stay the plain base URL.
+		self._backendURL = nc.app_cfg.endpoint
 		self.secret = os.environ["LT_INTERNAL_SECRET"]
 
 		self.room_token = room_token
