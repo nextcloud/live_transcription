@@ -1196,6 +1196,13 @@ class SpreedClient:
 			RTCSessionDescription(type="offer", sdp=message["message"]["data"]["payload"]["sdp"])
 		)
 
+		# only the audio track is transcribed, and aiortc decodes every track it
+		# accepts whether or not anything reads it; declining the rest keeps the
+		# video decoder out of the picture entirely
+		for transceiver in pc.getTransceivers():
+			if transceiver.kind != "audio":
+				transceiver.direction = "inactive"
+
 		answer = await pc.createAnswer()
 		await pc.setLocalDescription(answer)
 		await self.send_offer_answer(message["message"]["data"]["from"], message["message"]["data"]["sid"], answer.sdp)
