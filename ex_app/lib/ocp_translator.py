@@ -21,7 +21,9 @@ from utils import timed_cache_async
 LOGGER = logging.getLogger("lt.ocp_translator")
 TRANSLATE_TASK_TYPE = "core:text2text:translate"
 AUTO_DETECT_ORIGIN_LANG_ID = "detect_language"
-OCP_ORIGIN_LANG_ID: str | None = None
+# origin languages the provider does not offer, mapped to the fallback that was
+# chosen for them; keyed by language so one room's fallback does not follow another's
+OCP_ORIGIN_LANG_ID: dict[str, str] = {}
 
 
 class Task(BaseModel):
@@ -115,7 +117,9 @@ class OCPTranslator(ATranslator):
 						"customId": f"lt-{self.room_token}-{self.origin_language}-{self.target_language}",
 						"input": {
 							"input": message,
-							"origin_language": OCP_ORIGIN_LANG_ID or self.origin_language,
+							"origin_language": OCP_ORIGIN_LANG_ID.get(
+								self.origin_language, self.origin_language
+							),
 							"target_language": self.target_language,
 						},
 					},
@@ -293,9 +297,10 @@ class OCPTranslator(ATranslator):
 	@staticmethod
 	@timed_cache_async()
 	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
-		"""Also sets self.__ocp_origin_lang_id to AUTO_DETECT_ORIGIN_LANG_ID if the origin language is not supported but auto-detect is."""  # noqa: E501
-
-		global OCP_ORIGIN_LANG_ID
+		"""Also records the origin language in OCP_ORIGIN_LANG_ID as needing
+		AUTO_DETECT_ORIGIN_LANG_ID, if the provider does not support it but does
+		support auto-detection.
+		"""
 
 		task_types = await OCPTranslator.__get_task_types()
 
@@ -313,7 +318,7 @@ class OCPTranslator(ATranslator):
 					origin_language,
 				)
 				return False
-			OCP_ORIGIN_LANG_ID = AUTO_DETECT_ORIGIN_LANG_ID
+			OCP_ORIGIN_LANG_ID[origin_language] = AUTO_DETECT_ORIGIN_LANG_ID
 
 		if not any(
 			tlang.value == target_language
