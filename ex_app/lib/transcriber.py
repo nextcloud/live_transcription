@@ -65,7 +65,13 @@ class VoskTranscriber:
 					}
 				})
 			)
-			# todo: wait for language set confirmation
+			# the server answers the config with {"success": ...}; leaving it in the
+			# queue puts every later recv() one message behind its send()
+			response = None
+			max_received_msgs = MAX_CONNECT_TRIES
+			while (not response or "success" not in response) and max_received_msgs > 0:
+				response = await self.__voskcon.recv()
+				max_received_msgs -= 1
 
 	async def start(self, stream: AudioStream):
 		if self.audio_task and not self.audio_task.done():
