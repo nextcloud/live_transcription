@@ -44,7 +44,7 @@ from livetypes import (
 )
 from meta_translator import MetaTranslator
 from models import LANGUAGE_MAP
-from nc_py_api import NextcloudApp
+from nc_py_api import AsyncNextcloudApp
 from transcriber import VoskTranscriber
 from utils import get_ssl_context, hmac_sha256, sanitize_websocket_url
 from websockets import ClientConnection
@@ -102,9 +102,7 @@ class SpreedClient:
 		self.resumeid = None
 		self.sessionid = None
 
-		nc = NextcloudApp()
 		self._websocket_url = sanitize_websocket_url(os.environ["LT_HPB_URL"])
-		self._backendURL = nc.app_cfg.endpoint + "/ocs/v2.php/apps/spreed/api/v3/signaling/backend"
 		self.secret = os.environ["LT_INTERNAL_SECRET"]
 
 		self.room_token = room_token
@@ -436,6 +434,14 @@ class SpreedClient:
 
 	async def send_hello(self):
 		nonce = token_urlsafe(64)
+		nc = AsyncNextcloudApp()
+		abs_url_res = await nc.ocs(
+			"GET",
+			"/ocs/v1.php/apps/app_api/api/v1/info/nextcloud_url/absolute",
+			params={"url": ""},
+		)
+		nc_public_url = abs_url_res.get("absolute_url") or nc.app_cfg.endpoint
+
 		await self.send_message({
 			"type": "hello",
 			"hello": {
@@ -445,7 +451,7 @@ class SpreedClient:
 					"params": {
 						"random": nonce,
 						"token": hmac_sha256(self.secret, nonce),
-						"backend": self._backendURL,
+						"backend": nc_public_url,
 					}
 				},
 			},
