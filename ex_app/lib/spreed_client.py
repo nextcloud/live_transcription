@@ -61,10 +61,9 @@ class PeerConnection:
 	pc: RTCPeerConnection
 
 
-# How long to wait for an offer after sending a "requestoffer" before allowing
-# another request for the same session. Sending a second "requestoffer" makes the
-# HPB re-create the subscriber handle, which changes the subscriber sid.
-OFFER_REQUEST_TIMEOUT = 10.0
+# How long to wait for an offer after sending a "requestoffer" before sending
+# another request for the same session id. In seconds.
+OFFER_REQUEST_COOLDOWN = 10
 
 
 class SpreedClient:
@@ -988,7 +987,7 @@ class SpreedClient:
 							last_request = self._offer_requested.get(user_desc["sessionId"])
 							if (
 								last_request is not None
-								and asyncio.get_running_loop().time() - last_request < OFFER_REQUEST_TIMEOUT
+								and asyncio.get_running_loop().time() - last_request < OFFER_REQUEST_COOLDOWN
 							):
 								LOGGER.info("Offer request already in flight, skipping duplicate", extra={
 									"user_desc": user_desc,
