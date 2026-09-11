@@ -21,9 +21,10 @@ from utils import timed_cache_async
 LOGGER = logging.getLogger("lt.ocp_translator")
 TRANSLATE_TASK_TYPE = "core:text2text:translate"
 AUTO_DETECT_ORIGIN_LANG_ID = "detect_language"
-# origin languages the provider does not offer, mapped to the fallback that was
-# chosen for them; keyed by language so one room's fallback does not follow another's
-OCP_ORIGIN_LANG_ID: dict[str, str] = {}
+# origin languages the provider does not offer but can auto-detect; tracked per
+# language so one room's fallback does not follow another's
+OCP_AUTO_DETECT_ORIGIN_LANGS: set[str] = set()
+OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK = asyncio.Lock()
 
 
 class Task(BaseModel):
@@ -102,6 +103,14 @@ class OCPTranslator(ATranslator):
 		nc = AsyncNextcloudApp()
 
 		sched_tries = OCP_TASK_PROC_SCHED_RETRIES
+
+		async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+			origin_language = (
+				AUTO_DETECT_ORIGIN_LANG_ID
+				if self.origin_language in OCP_AUTO_DETECT_ORIGIN_LANGS
+				else self.origin_language
+			)
+
 		while True:
 			try:
 				sched_tries -= 1
@@ -117,9 +126,7 @@ class OCPTranslator(ATranslator):
 						"customId": f"lt-{self.room_token}-{self.origin_language}-{self.target_language}",
 						"input": {
 							"input": message,
-							"origin_language": OCP_ORIGIN_LANG_ID.get(
-								self.origin_language, self.origin_language
-							),
+							"origin_language": origin_language,
 							"target_language": self.target_language,
 						},
 					},
@@ -297,9 +304,8 @@ class OCPTranslator(ATranslator):
 	@staticmethod
 	@timed_cache_async()
 	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
-		"""Also records the origin language in OCP_ORIGIN_LANG_ID as needing
-		AUTO_DETECT_ORIGIN_LANG_ID, if the provider does not support it but does
-		support auto-detection.
+		"""Also records the origin language in OCP_AUTO_DETECT_ORIGIN_LANGS, if the
+		provider does not support it but does support auto-detection.
 		"""
 
 		task_types = await OCPTranslator.__get_task_types()
@@ -318,7 +324,8 @@ class OCPTranslator(ATranslator):
 					origin_language,
 				)
 				return False
-			OCP_ORIGIN_LANG_ID[origin_language] = AUTO_DETECT_ORIGIN_LANG_ID
+			async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+				OCP_AUTO_DETECT_ORIGIN_LANGS.add(origin_language)
 
 		if not any(
 			tlang.value == target_language
