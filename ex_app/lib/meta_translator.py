@@ -55,7 +55,7 @@ class MetaTranslator:
 		self.room_lang_id = room_lang_id
 
 		async with self.translators_lock:
-			for target_lang_id, translator in list(self.translators.items()):
+			for target_lang_id, translator in self.translators.items():
 				rebuilt = OCPTranslator(room_lang_id, target_lang_id, self.room_token)
 				for nc_session_id in translator.nc_session_ids:
 					rebuilt.add_session_id(nc_session_id)
