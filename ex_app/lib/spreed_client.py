@@ -8,6 +8,7 @@ import dataclasses
 import json
 import logging
 import os
+import time
 import weakref
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -61,6 +62,11 @@ class PeerConnection:
 	pc: RTCPeerConnection
 
 
+# How long to wait for an offer after sending a "requestoffer" before sending
+# another request for the same session id. In seconds.
+OFFER_REQUEST_COOLDOWN = 10
+
+
 class SpreedClient:
 	def __init__(
 		self,
@@ -74,6 +80,8 @@ class SpreedClient:
 		self._monitor: asyncio.Task | None = None
 		self.peer_connections: dict[str, PeerConnection] = {}
 		self.peer_connection_lock = asyncio.Lock()
+		# sessions with an in-flight "requestoffer": {session_id: request time}
+		self._offer_requested: dict[str, float] = {}
 		self.targets: dict[str, Target] = {}
 		self.target_lock = asyncio.Lock()
 		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
@@ -935,6 +943,8 @@ class SpreedClient:
 								await self.transcribers[user_desc["sessionId"]].shutdown()
 								del self.transcribers[user_desc["sessionId"]]
 						await self.remove_target_hpb_sid(user_desc["sessionId"])
+						async with self.peer_connection_lock:
+							self._offer_requested.pop(user_desc["sessionId"], None)
 						async with self.target_lock:
 							# "nextcloudSessionId" may not be present in the user_desc in call disconnects
 							self.nc_sid_map.pop(user_desc.get("nextcloudSessionId", ""), None)
@@ -978,6 +988,18 @@ class SpreedClient:
 									"tag": "participants",
 								})
 								continue
+							last_request = self._offer_requested.get(user_desc["sessionId"])
+							if (
+								last_request is not None
+								and time.monotonic() - last_request < OFFER_REQUEST_COOLDOWN
+							):
+								LOGGER.info("Offer request already in flight, skipping duplicate", extra={
+									"user_desc": user_desc,
+									"room_token": self.room_token,
+									"tag": "participants",
+								})
+								continue
+							self._offer_requested[user_desc["sessionId"]] = time.monotonic()
 						await self.send_offer_request(user_desc["sessionId"])
 						continue
 
@@ -1076,6 +1098,7 @@ class SpreedClient:
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
 		async with self.peer_connection_lock:
+			self._offer_requested.pop(spkr_sid, None)
 			if (
 				spkr_sid in self.peer_connections
 				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
@@ -1135,6 +1158,7 @@ class SpreedClient:
 				async with weakself().peer_connection_lock:
 					if spkr_sid in weakself().peer_connections:
 						del weakself().peer_connections[spkr_sid]
+					weakself()._offer_requested.pop(spkr_sid, None)
 
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
@@ -1204,7 +1228,11 @@ class SpreedClient:
 
 		answer = await pc.createAnswer()
 		await pc.setLocalDescription(answer)
-		await self.send_offer_answer(message["message"]["data"]["from"], message["message"]["data"]["sid"], answer.sdp)
+		await self.send_offer_answer(
+			message["message"]["data"]["from"],
+			message["message"]["data"]["sid"],
+			answer.sdp,
+		)
 		LOGGER.debug("Sent answer for offer from %s", spkr_sid, extra={
 			"session_id": spkr_sid,
 			"answer": answer,
