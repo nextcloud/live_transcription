@@ -8,6 +8,7 @@ import dataclasses
 import json
 import logging
 import os
+import time
 import weakref
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -81,8 +82,6 @@ class SpreedClient:
 		self.peer_connection_lock = asyncio.Lock()
 		# sessions with an in-flight "requestoffer": {session_id: request time}
 		self._offer_requested: dict[str, float] = {}
-		# most recent subscriber sid announced by the HPB: {session_id: sid}
-		self._current_sid: dict[str, str] = {}
 		self.targets: dict[str, Target] = {}
 		self.target_lock = asyncio.Lock()
 		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
@@ -940,7 +939,6 @@ class SpreedClient:
 						await self.remove_target_hpb_sid(user_desc["sessionId"])
 						async with self.peer_connection_lock:
 							self._offer_requested.pop(user_desc["sessionId"], None)
-							self._current_sid.pop(user_desc["sessionId"], None)
 						async with self.target_lock:
 							# "nextcloudSessionId" may not be present in the user_desc in call disconnects
 							self.nc_sid_map.pop(user_desc.get("nextcloudSessionId", ""), None)
@@ -987,7 +985,7 @@ class SpreedClient:
 							last_request = self._offer_requested.get(user_desc["sessionId"])
 							if (
 								last_request is not None
-								and asyncio.get_running_loop().time() - last_request < OFFER_REQUEST_COOLDOWN
+								and time.monotonic() - last_request < OFFER_REQUEST_COOLDOWN
 							):
 								LOGGER.info("Offer request already in flight, skipping duplicate", extra={
 									"user_desc": user_desc,
@@ -995,7 +993,7 @@ class SpreedClient:
 									"tag": "participants",
 								})
 								continue
-							self._offer_requested[user_desc["sessionId"]] = asyncio.get_running_loop().time()
+							self._offer_requested[user_desc["sessionId"]] = time.monotonic()
 						await self.send_offer_request(user_desc["sessionId"])
 						continue
 
@@ -1095,11 +1093,6 @@ class SpreedClient:
 		spkr_sid = message["message"]["sender"]["sessionid"]
 		async with self.peer_connection_lock:
 			self._offer_requested.pop(spkr_sid, None)
-			# adopt the newest sid even for offers we skip below, so that the answer
-			# and the trickled candidates are not stamped with a stale subscriber sid
-			new_sid = message["message"]["data"].get("sid")
-			if new_sid:
-				self._current_sid[spkr_sid] = new_sid
 			if (
 				spkr_sid in self.peer_connections
 				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
@@ -1160,7 +1153,6 @@ class SpreedClient:
 					if spkr_sid in weakself().peer_connections:
 						del weakself().peer_connections[spkr_sid]
 					weakself()._offer_requested.pop(spkr_sid, None)
-					weakself()._current_sid.pop(spkr_sid, None)
 
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
@@ -1232,7 +1224,7 @@ class SpreedClient:
 		await pc.setLocalDescription(answer)
 		await self.send_offer_answer(
 			message["message"]["data"]["from"],
-			self._current_sid.get(spkr_sid) or message["message"]["data"]["sid"],
+			message["message"]["data"]["sid"],
 			answer.sdp,
 		)
 		LOGGER.debug("Sent answer for offer from %s", spkr_sid, extra={
@@ -1266,7 +1258,7 @@ class SpreedClient:
 				candidates.append(line[2:])
 				await self.send_candidate(
 					message["message"]["sender"]["sessionid"],
-					self._current_sid.get(spkr_sid) or message["message"]["data"]["sid"],
+					message["message"]["data"]["sid"],
 					line[2:],
 				)
 
