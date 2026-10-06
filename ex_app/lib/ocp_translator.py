@@ -21,7 +21,10 @@ from utils import timed_cache_async
 LOGGER = logging.getLogger("lt.ocp_translator")
 TRANSLATE_TASK_TYPE = "core:text2text:translate"
 AUTO_DETECT_ORIGIN_LANG_ID = "detect_language"
-OCP_ORIGIN_LANG_ID: str | None = None
+# origin languages the provider does not offer but can auto-detect; tracked per
+# language so one room's fallback does not follow another's
+OCP_AUTO_DETECT_ORIGIN_LANGS: set[str] = set()
+OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK = asyncio.Lock()
 
 
 class Task(BaseModel):
@@ -100,6 +103,14 @@ class OCPTranslator(ATranslator):
 		nc = AsyncNextcloudApp()
 
 		sched_tries = OCP_TASK_PROC_SCHED_RETRIES
+
+		async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+			origin_language = (
+				AUTO_DETECT_ORIGIN_LANG_ID
+				if self.origin_language in OCP_AUTO_DETECT_ORIGIN_LANGS
+				else self.origin_language
+			)
+
 		while True:
 			try:
 				sched_tries -= 1
@@ -115,7 +126,7 @@ class OCPTranslator(ATranslator):
 						"customId": f"lt-{self.room_token}-{self.origin_language}-{self.target_language}",
 						"input": {
 							"input": message,
-							"origin_language": OCP_ORIGIN_LANG_ID or self.origin_language,
+							"origin_language": origin_language,
 							"target_language": self.target_language,
 						},
 					},
@@ -293,9 +304,9 @@ class OCPTranslator(ATranslator):
 	@staticmethod
 	@timed_cache_async()
 	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
-		"""Also sets self.__ocp_origin_lang_id to AUTO_DETECT_ORIGIN_LANG_ID if the origin language is not supported but auto-detect is."""  # noqa: E501
-
-		global OCP_ORIGIN_LANG_ID
+		"""Also records the origin language in OCP_AUTO_DETECT_ORIGIN_LANGS, if the
+		provider does not support it but does support auto-detection.
+		"""
 
 		task_types = await OCPTranslator.__get_task_types()
 
@@ -313,7 +324,8 @@ class OCPTranslator(ATranslator):
 					origin_language,
 				)
 				return False
-			OCP_ORIGIN_LANG_ID = AUTO_DETECT_ORIGIN_LANG_ID
+			async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+				OCP_AUTO_DETECT_ORIGIN_LANGS.add(origin_language)
 
 		if not any(
 			tlang.value == target_language
