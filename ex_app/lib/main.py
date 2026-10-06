@@ -22,7 +22,7 @@ from livetypes import (
 	TranslateFatalException,
 	TranslateLangPairException,
 	TranscriptTargetNotFoundException,
-	VoskException,
+	ASRException,
 )
 from dotenv import load_dotenv
 load_dotenv()
@@ -41,7 +41,14 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 from logger import get_logging_config, setup_logging
 from meta_translator import MetaTranslator
-from models import VOSK_SUPPORTED_LANGUAGE_MAP
+from models import (
+	MODEL_DIR_NAME,
+	MODEL_REPO,
+	MODEL_REVISION,
+	SUPPORTED_LANGUAGE_MAP,
+	VAD_MODEL_NAME,
+	VAD_MODEL_URL,
+)
 from nc_py_api import AsyncNextcloudApp, NextcloudApp
 from nc_py_api.ex_app import AppAPIAuthMiddleware, persistent_storage, run_app, set_handlers, setup_nextcloud_logging
 from service import Application
@@ -51,11 +58,17 @@ LOGGER_CONFIG_NAME = "../../logger_config.yaml"
 LOGGER = logging.getLogger("lt")
 SERVICE: Application
 ENABLED = Event()
-MODELS_TO_FETCH = {
-	"Nextcloud-AI/vosk-models": {
-		"local_dir": persistent_storage(),
-		"revision": "06f2f156dcd79092400891afb6cf8101e54f6ba2",
-	}
+MODELS_TO_FETCH: dict[str, dict] = {
+	# one multilingual model covers every supported language
+	MODEL_REPO: {
+		"local_dir": os.path.join(persistent_storage(), MODEL_DIR_NAME),
+		"revision": MODEL_REVISION,
+		"allow_patterns": ["*.int8.onnx", "tokens.txt"],
+	},
+	VAD_MODEL_URL: {
+		"save_path": os.path.join(persistent_storage(), VAD_MODEL_NAME),
+		"max_retries": 5,
+	},
 }
 # todo: declarative settings for language override and model download
 
@@ -102,15 +115,15 @@ async def get_enabled():
 	})
 async def set_call_language(req: RoomLanguageSetRequest):
 	try:
-		if not req.langId or req.langId not in VOSK_SUPPORTED_LANGUAGE_MAP:
+		if not req.langId or req.langId not in SUPPORTED_LANGUAGE_MAP:
 			return JSONResponse(
 				status_code=400,
 				content={"error": "Invalid or unsupported language ID provided."},
 			)
 		await SERVICE.set_call_language(req)
 		return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
-	except VoskException as e:
-		LOGGER.exception("VoskException during set_call_language", exc_info=e)
+	except ASRException as e:
+		LOGGER.exception("ASRException during set_call_language", exc_info=e)
 		return JSONResponse(status_code=e.retcode, content={"error": str(e)})
 	except SpreedClientException as e:
 		return JSONResponse(status_code=404, content={"error": str(e)})
@@ -250,7 +263,7 @@ async def transcribe_call(req: TranscribeRequest):
 
 @ROUTER_V1.get("/languages")
 def get_supported_languages() -> dict[str, LanguageModel]:
-	return VOSK_SUPPORTED_LANGUAGE_MAP
+	return SUPPORTED_LANGUAGE_MAP
 
 
 APP.include_router(ROUTER_V1)
@@ -273,7 +286,7 @@ async def get_capabilities() -> dict[str, dict]:
 				*(["live_translation"] if supported_translation_languages else []),
 			],
 			"live_transcription": {
-				"supported_languages": VOSK_SUPPORTED_LANGUAGE_MAP,
+				"supported_languages": SUPPORTED_LANGUAGE_MAP,
 			},
 			**({
 				"live_translation": {

@@ -5,6 +5,9 @@
 APP_ID := live_transcription
 APP_NAME := Live Transcription
 APP_VERSION := 2.1.0
+# sherpa-onnx publishes CUDA builds outside PyPI, because the plain wheel is
+# CPU-only
+SHERPA_ONNX_CUDA_WHEEL := https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.7/sherpa_onnx-1.13.7+cuda12.cudnn9.onnxruntime1.27.1-cp312-cp312-linux_x86_64.whl
 JSON_INFO := "{\"id\":\"$(APP_ID)\",\"name\":\"$(APP_NAME)\",\"daemon_config_name\":\"manual_install\",\"version\":\"$(APP_VERSION)\",\"secret\":\"12345\",\"port\":23000}"
 
 
@@ -33,8 +36,8 @@ help:
 .PHONY: build-push
 build-push:
   # docker login ghcr.io
-	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --tag ghcr.io/nextcloud-releases/live_transcription:latest --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION) --build-arg HAVE_CUDA=0 --build-arg KALDI_MKL=1 --build-arg RT_IMAGE=ubuntu:22.04 .
-	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --tag ghcr.io/nextcloud-releases/live_transcription:latest-cuda --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION)-cuda --build-arg HAVE_CUDA=1 --build-arg KALDI_MKL=0 --build-arg RT_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04 .
+	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --tag ghcr.io/nextcloud-releases/live_transcription:latest --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION) --build-arg RT_IMAGE=ubuntu:22.04 .
+	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --tag ghcr.io/nextcloud-releases/live_transcription:latest-cuda --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION)-cuda --build-arg RT_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04 --build-arg SHERPA_ONNX_WHEEL=$(SHERPA_ONNX_CUDA_WHEEL) .
 
 .PHONY: run30
 run29:

@@ -113,7 +113,7 @@ class SpreedRateLimitedException(SpreedClientException):
 	"""Exception raised when the Spreed Client is rate limited by the HPB server."""
 
 
-class VoskException(Exception):
+class ASRException(Exception):
 	retcode: int
 
 	def __init__(self, message: str, retcode: int = 500):

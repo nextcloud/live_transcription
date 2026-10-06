@@ -74,8 +74,6 @@ jobs:
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:latest
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:${{ fromJson(steps.appinfo.outputs.result).version }}
           build-args: |
-            HAVE_CUDA=0
-            KALDI_MKL=1
             RT_IMAGE=ubuntu:22.04
           no-cache: true
 
@@ -91,7 +89,6 @@ jobs:
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:latest-cuda
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:${{ fromJson(steps.appinfo.outputs.result).version }}-cuda
           build-args: |
-            HAVE_CUDA=1
-            KALDI_MKL=0
             RT_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04
+            SHERPA_ONNX_WHEEL=https://huggingface.co/csukuangfj2/sherpa-onnx-wheels/resolve/main/cuda/1.13.7/sherpa_onnx-1.13.7+cuda12.cudnn9.onnxruntime1.27.1-cp312-cp312-linux_x86_64.whl
           no-cache: true

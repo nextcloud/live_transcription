@@ -83,19 +83,19 @@ def check_hpb_env_vars():
 			"Verify that it is a valid URL with a protocol and hostname."
 		)
 
-	vosk_url = os.environ.get("LT_VOSK_SERVER_URL")
-	if vosk_url:
-		vosk_url_parsed = urlparse(vosk_url)
-		vosk_host = vosk_url_parsed.hostname
-		if not vosk_host:
+	asr_url = os.environ.get("LT_ASR_SERVER_URL")
+	if asr_url:
+		asr_url_parsed = urlparse(asr_url)
+		asr_host = asr_url_parsed.hostname
+		if not asr_host:
 			raise ValueError(
-				f"Could not detect hostname in LT_VOSK_SERVER_URL: {vosk_url}. "
+				f"Could not detect hostname in LT_ASR_SERVER_URL: {asr_url}. "
 				"Verify that it is a valid URL with a protocol and hostname."
 			)
 		try:
-			_ = vosk_url_parsed.port
+			_ = asr_url_parsed.port
 		except ValueError as e:
-			raise ValueError(f"Invalid VOSK server URL: {vosk_url}") from e
+			raise ValueError(f"Invalid ASR server URL: {asr_url}") from e
 
 
 def get_hpb_settings() -> HPBSettings:

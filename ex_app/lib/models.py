@@ -5,34 +5,60 @@
 
 from livetypes import LanguageMetadata, LanguageModel
 
-MODELS_LIST = {
-	"ar": "vosk-model-ar-mgb2-0.4",
-	"ar_TN": "vosk-model-small-ar-tn-0.1-linto",
-	"br": "vosk-model-br-0.8",
-	"ca": "vosk-model-small-ca-0.4",
-	"cs": "vosk-model-small-cs-0.4-rhasspy",
-	"de": "vosk-model-small-de-0.15",
-	"en": "vosk-model-en-us-0.22",
-	"eo": "vosk-model-small-eo-0.42",
-	"es": "vosk-model-small-es-0.42",
-	"fa": "vosk-model-small-fa-0.42",
-	"fr": "vosk-model-small-fr-0.22",
-	"hi": "vosk-model-small-hi-0.22",
-	"it": "vosk-model-small-it-0.22",
-	"ja": "vosk-model-small-ja-0.22",
-	"kk": "vosk-model-small-kz-0.15",
-	"ko": "vosk-model-small-ko-0.22",
-	"nl": "vosk-model-small-nl-0.22",
-	"pl": "vosk-model-small-pl-0.22",
-	"pt": "vosk-model-small-pt-0.3",
-	"ru": "vosk-model-small-ru-0.22",
-	"te": "vosk-model-small-te-0.42",
-	"tg": "vosk-model-small-tg-0.22",
-	"tr": "vosk-model-small-tr-0.3",
-	"uk": "vosk-model-small-uk-v3-nano",
-	"uz": "vosk-model-small-uz-0.22",
-	"vi": "vosk-model-small-vn-0.4",
-	"zh": "vosk-model-small-cn-0.22",
+# Hugging Face repo holding the sherpa-onnx export of
+# nvidia/nemotron-3.5-asr-streaming-0.6b, pinned by revision.
+MODEL_REPO = "csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8-2026-06-11"
+MODEL_REVISION = "424ce58898995b713f84341f2e1492f9207a26aa"
+MODEL_DIR_NAME = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8"
+
+# Silero VAD, used to keep silent participants off the decoder.
+VAD_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+VAD_MODEL_NAME = "silero_vad.onnx"
+
+# Language id to the prompt the model is conditioned on for every chunk.
+#
+# One model covers every entry, thus there is no per-language model to download.
+# These are the 32 locales NVIDIA lists as usable out of the box, which are 19
+# transcription-ready locales plus 13 broad-coverage ones. The tokenizer also
+# knows 8 more locales, but they need fine-tuning first, thus they are absent.
+#
+# The values are full locales and not the bare language ids the app uses. The
+# model's own prompt table, which is metadata_props["prompt_dictionary"] inside
+# encoder.onnx, has no bare "ja", "vi" or "zh", and those would fall back to
+# auto-detect. It also maps a bare "es" to es-US while the app means es-ES. An
+# unknown value degrades silently to auto-detect, thus callers are validated
+# against this table before the prompt is applied.
+LANGUAGE_PROMPTS = {
+	"ar": "ar-AR",
+	"bg": "bg-BG",
+	"cs": "cs-CZ",
+	"da": "da-DK",
+	"de": "de-DE",
+	"en": "en-US",
+	"es": "es-ES",
+	"et": "et-EE",
+	"fi": "fi-FI",
+	"fr": "fr-FR",
+	"hi": "hi-IN",
+	"hr": "hr-HR",
+	"hu": "hu-HU",
+	"it": "it-IT",
+	"ja": "ja-JP",
+	"ko": "ko-KR",
+	"nl": "nl-NL",
+	# The app's language table calls Norwegian "no", and the model prompt is
+	# Bokmal.
+	"no": "nb-NO",
+	"pl": "pl-PL",
+	"pt": "pt-PT",
+	"ro": "ro-RO",
+	"ru": "ru-RU",
+	"sk": "sk-SK",
+	"sv": "sv-SE",
+	"tr": "tr-TR",
+	"uk": "uk-UA",
+	"vi": "vi-VN",
+	"zh": "zh-CN",
 }
 
 
@@ -455,5 +481,4 @@ LANGUAGE_MAP = {
 	"zun": LanguageModel(name="Zuni"),
 }
 
-
-VOSK_SUPPORTED_LANGUAGE_MAP = {lang_id: LANGUAGE_MAP[lang_id] for lang_id in MODELS_LIST}
+SUPPORTED_LANGUAGE_MAP = {lang_id: LANGUAGE_MAP[lang_id] for lang_id in LANGUAGE_PROMPTS}

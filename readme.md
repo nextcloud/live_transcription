@@ -13,6 +13,125 @@ The installation steps can be found here: https://docs.nextcloud.com/server/late
 > [!IMPORTANT]
 > Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are required to be set in "Deploy Options" near the "Deploy and Enable" button before the install.
 
+### Speech recognition engine
+
+Transcription runs on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) with
+NVIDIA's [nemotron-3.5-asr-streaming-0.6b](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b),
+a cache-aware FastConformer transducer that emits text while the speaker is still
+talking. One 651 MB model covers all 28 supported languages and writes punctuation
+and capital letters. The app downloads it on first start into its persistent storage,
+together with a 628 kB [silero VAD](https://github.com/snakers4/silero-vad).
+
+The model weights are licensed under [OpenMDW-1.1](https://openmdw.ai/license/1-1/),
+which places no restrictions on the transcripts the model produces.
+
+The supported languages are Arabic, Bulgarian, Chinese, Croatian, Czech, Danish, Dutch,
+English, Estonian, Finnish, French, German, Hindi, Hungarian, Italian, Japanese,
+Korean, Norwegian, Polish, Portuguese, Romanian, Russian, Slovak, Spanish, Swedish,
+Turkish, Ukrainian, Vietnamese.
+
+#### Sizing: how one example host performs
+
+The numbers below are measured and not estimated. They are a worked example of what
+to expect and not a guarantee. Your own figures will differ with another CPU, another
+chunk size, or other languages.
+
+**The example host**
+
+| | |
+|---|---|
+| CPU | 4 cores, x86-64, **no GPU** |
+| RAM | 12 GB |
+| Model | `nemotron-3.5-asr-streaming-0.6b`, int8 ONNX, 320 ms chunk (the default) |
+| `LT_MAX_WORKERS` | 4 (the default: one per core) |
+| Voice activity detection | on (the default) |
+| Audio | 48 kHz mono, 400 ms per chunk, as Talk delivers it |
+
+Each participant holds one websocket connection. In the measurement every speaker
+used a **different recording in a different language**, thus no two streams shared a
+transcript or a language prompt.
+
+**Memory**
+
+Memory is dominated by the model, which is loaded once and shared by everyone. The
+number of participants has little effect:
+
+| Participants | Speaking | Resident memory |
+|---|---|---|
+| (idle, model loaded) | - | 1007 MiB |
+| 2 | 1 | 1062 MiB |
+| 4 | 2 | 1116 MiB |
+| 16 | 2 | 1195 MiB |
+| 16 | 4 | 1200 MiB |
+
+A 16-person call costs about the same as a 2-person call. The first participants look
+expensive at approximately 39 MiB each, and the later ones almost free at
+approximately 1 MiB each. The cause is that the early cost is the inference engine's
+per-thread memory arenas, which are allocated once and then reused.
+
+**Budget approximately 1.2 GB for the steady state, and give the container 1.5 GB.**
+Do not budget per participant.
+
+**Speed is the real limit**
+
+Memory is nearly identical whether one person speaks or four, but responsiveness is
+not. The server must transcribe a 400 ms chunk in under 400 ms to keep pace:
+
+| Participants | Speaking | Reply delay (p95) | Keeps pace |
+|---|---|---|---|
+| 16 | 1 | 0.22 s | yes |
+| 16 | 2 | 0.28 s | yes |
+| 8 | 4 | 0.44 s | **no** |
+| 16 | 4 | 0.42 s | **no** |
+
+On this host the ceiling is **four people speaking at the same time**, which is the
+core count. One or two concurrent speakers, the normal shape of a meeting, leaves
+comfortable headroom. Beyond the ceiling the delay grows without bound and the
+captions fall progressively further behind.
+
+Size by *simultaneous speakers* and not by participants. More speakers need more
+cores or another server, and more memory does not help. `LT_MAX_WORKERS` bounds how
+many chunks decode at once, and a value above the core count does not add capacity,
+because it makes every speaker slower.
+
+**Why idle participants are cheap**
+
+The engine has no silence detection of its own. Without a voice activity detector it
+spends 85 % to 97 % as much CPU on a silent stream as on a speaking one, and four
+participants would exceed realtime even with one person talking. The VAD is what
+makes listeners cost approximately 1 MiB and almost no CPU. Disable it with
+`LT_ASR_DISABLE_VAD` only when debugging.
+
+**Stability**
+
+Memory settles rather than creeping. In a 20-minute soak with 8 connected
+participants holding one connection each, 2 of them speaking continuously for
+161 audio-minutes in total, resident memory rose from 1090 MiB to 1110 MiB and then
+stopped. The last 8 minutes were flat at 1110 MiB, and the measured growth rate fell
+from 0.0099 to 0.0022 MiB per audio-second.
+
+A rate that decays shows one-off allocation being reused, whereas a leak holds the
+rate constant. Thus treat approximately 1.2 GB as the steady state, and keep the
+1.5 GB allowance for headroom.
+
+#### Using an external server
+
+Set `LT_DISABLE_INTERNAL_ASR=true` and point `LT_ASR_SERVER_URL` at your own server.
+It must answer **exactly one** JSON message per binary audio frame, because the client
+blocks on a reply after every frame:
+
+```
+C->S  {"config": {"language": "en", "sample_rate": 48000}}
+S->C  {"success": true}
+C->S  <binary s16le mono PCM>
+S->C  {"partial": "..."}  or  {"text": "..."}     one, per frame
+C->S  {"eof": 1}
+S->C  {"text": "..."}
+```
+
+`{"text": ...}` marks the end of an utterance and triggers translation.
+`{"partial": ...}` is an interim result for the same utterance.
+
 ### Environment variables
 
 `example.env` contains all the environment variables needed to run the app. You can copy it to `.env` and change the values as needed.
@@ -33,7 +152,7 @@ The description of each variable other than AppAPI variables is in the `appinfo/
 2. `python -m venv .venv`
 3. `. .venv/bin/activate`
 4. `pip install -r requirements_dev.txt`
-5. `python ex_app/lib/vosk_server.py`
+5. `python ex_app/lib/asr_server.py`
 
 _in another terminal_
 

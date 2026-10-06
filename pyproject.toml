@@ -42,5 +42,5 @@ messages_control.disable = [
 ]
 
 [[tool.mypy.overrides]]
-module = ["nc_py_api.*", "print_color.*", "vosk.*", "niquests.*"]
+module = ["nc_py_api.*", "print_color.*", "sherpa_onnx.*", "niquests.*"]
 follow_untyped_imports = true

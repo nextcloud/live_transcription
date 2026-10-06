@@ -31,6 +31,7 @@ from constants import (
 	TIMEOUT_INCREASE_FACTOR,
 )
 from livetypes import (
+	ASRException,
 	CallFlag,
 	HPBSettings,
 	ReconnectMethod,
@@ -41,12 +42,11 @@ from livetypes import (
 	TranscriptTargetNotFoundException,
 	TranslateInputOutput,
 	TranslateLangPairException,
-	VoskException,
 )
 from meta_translator import MetaTranslator
 from models import LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp
-from transcriber import VoskTranscriber
+from transcriber import Transcriber
 from utils import get_ssl_context, hmac_sha256, sanitize_websocket_url
 from websockets import ClientConnection
 from websockets import State as WsState
@@ -89,7 +89,7 @@ class SpreedClient:
 		self._nc_sid_wait_stash: dict[str, None] = {}
 		self.transcript_queue: asyncio.Queue = asyncio.Queue()
 		self._transcript_sender: asyncio.Task | None = None
-		self.transcribers: dict[str, VoskTranscriber] = {}
+		self.transcribers: dict[str, Transcriber] = {}
 		self.transcriber_lock = asyncio.Lock()
 		self.defunct = asyncio.Event()
 		self._close_task: asyncio.Task | None = None
@@ -1180,7 +1180,7 @@ class SpreedClient:
 
 				stream = AudioStream(track)
 				async with weakself().transcriber_lock:
-					weakself().transcribers[spkr_sid] = VoskTranscriber(
+					weakself().transcribers[spkr_sid] = Transcriber(
 						spkr_sid,
 						weakself().room_lang_id,
 						weakself().transcript_queue,
@@ -1192,12 +1192,12 @@ class SpreedClient:
 						await weakself().transcribers[spkr_sid].connect()
 						await weakself().transcribers[spkr_sid].start(stream=stream)
 					except Exception:
-						LOGGER.exception("Error in connection and start of the Vosk server. Cannot continue further.",
+						LOGGER.exception("Error in connection and start of the ASR server. Cannot continue further.",
 							extra={
-								"server_url": os.getenv("LT_VOSK_SERVER_URL", "ws://localhost:2702"),
+								"server_url": os.getenv("LT_ASR_SERVER_URL", "ws://localhost:2702"),
 								"session_id": spkr_sid,
 								"room_token": weakself().room_token,
-								"tag": "vosk",
+								"tag": "asr",
 							},
 						)
 						if not weakself()._close_task:
@@ -1286,12 +1286,12 @@ class SpreedClient:
 				"excs": excs,
 				"tag": "transcriber",
 			})
-			raise VoskException(
+			raise ASRException(
 				f"Failed to set language for multiple transcribers, first of which is: {excs[0]}",
 				retcode=500,
 			)
 		if len(excs) == 1:
-			raise VoskException(f"Failed to set language for one transcriber: {excs[0]}", retcode=500)
+			raise ASRException(f"Failed to set language for one transcriber: {excs[0]}", retcode=500)
 		self.room_lang_id = lang_id
 
 	async def transcipt_queue_consumer(self):
