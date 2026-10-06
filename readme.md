@@ -137,6 +137,46 @@ S->C  {"text": "..."}
 `example.env` contains all the environment variables needed to run the app. You can copy it to `.env` and change the values as needed.
 The description of each variable other than AppAPI variables is in the `appinfo/info.xml` file.
 
+### Image variants
+
+The Dockerfile is multi-stage and builds two runtime images, selected with
+`--target`:
+
+| Target | Base | Use it for |
+|---|---|---|
+| `runtime-cpu` (default) | `debian:13-slim` | every CPU deployment, amd64 and arm64 |
+| `runtime-cuda` | `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` | NVIDIA GPUs, amd64 only |
+
+```bash
+docker build -t live_transcription .                        # CPU
+docker build --target runtime-cuda -t live_transcription:cuda .
+```
+
+The CPU image needs no GPU libraries at all, so it stays around 810 MB. The CUDA
+image is larger, because the CUDA runtime and cuDNN alone are over a gigabyte.
+
+**Why CUDA is compiled rather than installed.** sherpa-onnx on PyPI is CPU-only,
+and asking a CPU wheel for the CUDA provider falls back to the CPU silently
+rather than failing. The `sherpa-builder-cuda` stage therefore compiles the wheel
+from the sdist with `SHERPA_ONNX_ENABLE_GPU=ON`, and only the finished wheel is
+copied into the runtime image, which keeps the CUDA toolkit and the compiler out
+of what you ship.
+
+**Why the `cudnn-` tags.** The CUDA execution provider links against
+`libcudnn.so.9`, which the plain `devel` and `runtime` CUDA images do not carry.
+Only the `cudnn-` flavours ship it, thus both the builder and the runtime use
+them. With a non-cudnn base the provider fails to load at runtime and the server
+falls back to the CPU, which looks like a GPU that is simply slow.
+
+Run the CUDA image with the NVIDIA container runtime, for example
+`docker run --gpus all`, and set `COMPUTE_DEVICE=cuda`. The host needs only the
+NVIDIA driver, because the CUDA toolkit is inside the image.
+
+**AMD and Intel GPUs are not supported.** sherpa-onnx exposes exactly two GPU
+build switches, `SHERPA_ONNX_ENABLE_GPU` for NVIDIA and
+`SHERPA_ONNX_ENABLE_DIRECTML` for Windows. There is no ROCm, HIP or Vulkan
+backend, so an AMD or Intel GPU runs the CPU image.
+
 ### Dev Docker Setup
 
 1. `docker build -t ghcr.io/nextcloud-releases/live_transcription .`
