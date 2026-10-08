@@ -197,7 +197,16 @@ def build_recognizer(model_dir: str) -> sherpa_onnx.OnlineRecognizer:
 		LOGGER.info("COMPUTE_DEVICE=cuda: requesting the CUDA provider")
 
 	return sherpa_onnx.OnlineRecognizer.from_transducer(
-		num_threads=_env_int("LT_ASR_THREADS", os.cpu_count() or 4),
+		# One thread per decode, and concurrency comes from the pool instead.
+		# A 320 ms chunk is too small to split across cores: the parallel region
+		# is short, and onnxruntime keeps its intra-op threads spinning between
+		# operators, which bills idle spin as busy CPU. Raising this costs CPU
+		# without lowering latency. Measured with 4 speakers on a 4-core host,
+		# 1 thread against 4: 12.8 against 28.1 CPU seconds, and p95 210 ms
+		# against 384 ms. The default scales with the core count, so a 16-thread
+		# host was worse again at 81.0 CPU seconds and p95 1315 ms, where 103 of
+		# 112 chunks missed the 400 ms budget and the stream never caught up.
+		num_threads=_env_int("LT_ASR_THREADS", 1),
 		provider=provider,
 		decoding_method="greedy_search",
 		enable_endpoint_detection=True,
@@ -515,18 +524,32 @@ async def start():
 	recognizer = build_recognizer(model_dir)
 	LOGGER.info("Loaded the ASR model from %s", model_dir, extra={"tag": "asr"})
 
-	# One decode already saturates the cores through onnxruntime's intra-op
-	# threads, thus the pool bounds how many decodes overlap and not how many
-	# speakers may connect. More workers than cores makes every speaker slower
-	# and not faster.
-	workers = _env_int("LT_MAX_WORKERS", os.cpu_count() or 4)
-	pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="asr")
+	# This bounds how many decodes overlap and not how many speakers may connect.
+	# A single decode uses one thread, so the workers are what fills the cores.
+	# Above the core count the decodes only take turns, which adds latency without
+	# adding throughput. The value is still honoured, because the admin may know
+	# something this process cannot see, such as the container being one of
+	# several sharing the host.
+	cores = os.cpu_count() or 4
+	workers = max(1, _env_int("LT_MAX_WORKERS", cores))
+	if workers > cores:
+		LOGGER.warning(
+			"LT_MAX_WORKERS=%d is above the %d cores available. One decode uses one "
+			"thread, so the extra workers only take turns and every speaker gets "
+			"slower rather than the server serving more of them.",
+			workers, cores, extra={"tag": "asr"},
+		)
+	pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="asr")
 
 	async def handler(websocket: ws.ServerConnection):
 		await recognize(websocket, recognizer, pool, vad_model)
 
 	async with ws.serve(handler, interface, port, max_size=None):
-		LOGGER.info("ASR server listening on ws://%s:%d", interface, port, extra={"tag": "asr"})
+		LOGGER.info(
+			"ASR server listening on ws://%s:%d (%d workers, %d threads per decode)",
+			interface, port, workers, _env_int("LT_ASR_THREADS", 1),
+			extra={"tag": "asr"},
+		)
 		await asyncio.Future()
 
 

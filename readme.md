@@ -44,6 +44,7 @@ chunk size, or other languages.
 | RAM | 12 GB |
 | Model | `nemotron-3.5-asr-streaming-0.6b`, int8 ONNX, 320 ms chunk (the default) |
 | `LT_MAX_WORKERS` | 4 (the default: one per core) |
+| `LT_ASR_THREADS` | 1 (the default) |
 | Voice activity detection | on (the default) |
 | Audio | 48 kHz mono, 400 ms per chunk, as Talk delivers it |
 
@@ -79,10 +80,10 @@ not. The server must transcribe a 400 ms chunk in under 400 ms to keep pace:
 
 | Participants | Speaking | Reply delay (p95) | Keeps pace |
 |---|---|---|---|
-| 16 | 1 | 0.22 s | yes |
-| 16 | 2 | 0.28 s | yes |
-| 8 | 4 | 0.44 s | **no** |
-| 16 | 4 | 0.42 s | **no** |
+| any | 1 | 0.21 s | yes |
+| any | 4 | 0.32 s | yes |
+| any | 6 | 0.45 s | **no** |
+| any | 8 | 0.61 s | **no** |
 
 On this host the ceiling is **four people speaking at the same time**, which is the
 core count. One or two concurrent speakers, the normal shape of a meeting, leaves
@@ -92,7 +93,21 @@ captions fall progressively further behind.
 Size by *simultaneous speakers* and not by participants. More speakers need more
 cores or another server, and more memory does not help. `LT_MAX_WORKERS` bounds how
 many chunks decode at once, and a value above the core count does not add capacity,
-because it makes every speaker slower.
+because it makes every speaker slower. Such a value is logged as a warning and then
+honoured, because the server cannot tell whether the host is shared with something
+else that the admin is sizing around.
+
+Nothing is refused past the ceiling. Every speaker who connects is transcribed, and
+beyond the ceiling they all fall behind together rather than some being turned away.
+
+`LT_ASR_THREADS` is the other half of that budget, and it is the one worth leaving
+alone. It sets how many threads decode a *single* chunk, so the two multiply: the
+old default of one thread per core gave 16 threads per decode on a 16-thread host,
+and 16 of those in flight. A 320 ms chunk is too small to divide profitably, and
+the threads spend the difference spinning rather than working. Measured with four
+speakers on this host, raising it from 1 to 4 cost 28.1 CPU seconds instead of 12.8
+and pushed p95 from 210 ms to 384 ms, so it is slower *and* dearer in both
+directions.
 
 **Why idle participants are cheap**
 

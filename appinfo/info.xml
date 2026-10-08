@@ -66,6 +66,11 @@ IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are requi
 				<description>This bounds how many audio chunks are decoded at the same time, and by extension the maximum GPU and system memory usage. Participants above this number wait in a queue rather than being refused, thus a value above the CPU core count makes every speaker slower instead of adding capacity. The default is the CPU core count of the server.</description>
 			</variable>
 			<variable>
+				<name>LT_ASR_THREADS</name>
+				<display-name>Threads per transcription worker (optional)</display-name>
+				<description>This sets how many CPU threads one worker uses to decode a single audio chunk. The default is 1, which is the fastest setting as well as the cheapest, because a chunk is too small to divide across cores profitably. Raising it multiplies with "Max concurrent transcription workers" and makes every speaker slower, so leave it alone unless a measurement on your own hardware says otherwise.</description>
+			</variable>
+			<variable>
 				<name>LT_ASR_DISABLE_VAD</name>
 				<display-name>Disable voice activity detection (optional)</display-name>
 				<description>Voice activity detection keeps silent participants off the decoder. With it disabled a silent participant costs nearly as much CPU time as a speaking one, which puts a four-person call beyond realtime on a four-core host. Accepted values are "1", "0", "true" and "false".</description>
