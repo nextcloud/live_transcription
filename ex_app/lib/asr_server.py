@@ -33,6 +33,7 @@ import asyncio
 import json
 import logging
 import os
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from urllib.parse import urlparse
@@ -56,6 +57,9 @@ LOGGER = logging.getLogger("lt.asr_server")
 ENGINE_RATE = 16000
 
 VAD_WINDOW = 512  # silero v5 frame size at 16 kHz; sherpa requires exactly this
+
+# How many gated chunks are replayed when the gate opens. See Session.__init__.
+PRE_SPEECH_CHUNKS = 2
 
 # Low-pass FIR that downsamples to ENGINE_RATE for the VAD. The recognizer
 # resamples internally, but the VAD does not. It reads every 512-sample window as
@@ -234,8 +238,16 @@ def build_vad(vad_model: str) -> sherpa_onnx.VoiceActivityDetector | None:
 
 	config = sherpa_onnx.VadModelConfig()
 	config.silero_vad.model = vad_model
+	# silero's own defaults are 0.5 s of silence and 0.25 s of speech. The silence
+	# is shortened here because this gate only decides whether to spend CPU on a
+	# chunk, and the endpoint rules decide where an utterance ends. Holding the
+	# gate open for half a second after every word would spend CPU on silence.
 	config.silero_vad.min_silence_duration = _env_float("LT_ASR_VAD_MIN_SILENCE", 0.25)
 	config.silero_vad.threshold = _env_float("LT_ASR_VAD_THRESHOLD", 0.5)
+	# Left at silero's defaults: min_speech_duration 0.25 s and max_speech_duration
+	# 20 s. Both only bound the segments the VAD queues up, and this server never
+	# reads that queue, because the recognizer is fed the full-rate stream instead.
+	# window_size must stay 512, which is what silero v5 was exported with.
 	config.sample_rate = ENGINE_RATE
 	config.provider = "cpu"
 	config.num_threads = 1
@@ -271,9 +283,17 @@ class Session:
 		# a half windows of speech before it triggers, thus the chunk that first
 		# tests positive already starts mid-word. silero's own VADIterator
 		# compensates by back-dating the segment start by speech_pad_ms, and the
-		# equivalent here is to replay the last gated chunk ahead of the first
-		# decoded one.
-		self.__pre_speech: np.ndarray | None = None
+		# equivalent here is to replay the gated chunks ahead of the first decoded
+		# one.
+		#
+		# Two chunks, not one. Measured by logging the gate against chunk energy,
+		# the trigger lands one chunk after audible speech begins, and where the
+		# onset straddles a chunk boundary it lands two chunks late: a silence of
+		# 3.5 s before the utterance had energy in the two chunks preceding the
+		# trigger, and one chunk of replay left "And so my fellow Americans" as
+		# "Oh my fellow Americans". The cost of being generous is one extra chunk
+		# of silence decoded per utterance.
+		self.__pre_speech: deque[np.ndarray] = deque(maxlen=PRE_SPEECH_CHUNKS)
 		self.__language = DEFAULT_LANGUAGE
 		self.__sample_rate = 48000
 
@@ -297,7 +317,7 @@ class Session:
 		self.__stream = self.__create_stream()
 		self.__vad_tail = np.empty(0, dtype=np.float32)
 		self.__between_utterances = True
-		self.__pre_speech = None
+		self.__pre_speech.clear()
 
 		# The VAD reads every 512-sample window as 32 ms at ENGINE_RATE, thus audio
 		# must arrive at exactly that rate. An integer ratio covers what WebRTC
@@ -378,12 +398,11 @@ class Session:
 		# never decoded builds an unbounded backlog, which is decoded in a burst
 		# at the next word, so the cost is deferred and not avoided.
 		if self.__between_utterances and not self.__has_speech(pcm):
-			self.__pre_speech = pcm
+			self.__pre_speech.append(pcm)
 			return "", False
 
-		if self.__pre_speech is not None:
-			self.__stream.accept_waveform(self.__sample_rate, self.__pre_speech)
-			self.__pre_speech = None
+		while self.__pre_speech:
+			self.__stream.accept_waveform(self.__sample_rate, self.__pre_speech.popleft())
 		self.__stream.accept_waveform(self.__sample_rate, pcm)
 		while self.__recognizer.is_ready(self.__stream):
 			self.__recognizer.decode_stream(self.__stream)
@@ -391,6 +410,13 @@ class Session:
 		# Read the result BEFORE reset(), which discards the segment's text.
 		text = self.__recognizer.get_result(self.__stream)
 		if self.__recognizer.is_endpoint(self.__stream):
+			# reset() and not a new stream. It restores the encoder and decoder to
+			# their initial states but deliberately keeps the feature extractor,
+			# which is what the cache-aware model needs to carry acoustic context
+			# across the boundary. Measured over 90 s of conversational speech
+			# against a single uninterrupted stream, reset() diverged by 4.90 %
+			# and a fresh stream per utterance by 6.53 %, so rebuilding the stream
+			# costs accuracy exactly where the model is strongest.
 			self.__recognizer.reset(self.__stream)
 			self.__between_utterances = True
 			return text, True
