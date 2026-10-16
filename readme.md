@@ -43,7 +43,7 @@ chunk size, or other languages.
 | CPU | 4 cores, x86-64, **no GPU** |
 | RAM | 12 GB |
 | Model | `nemotron-3.5-asr-streaming-0.6b`, int8 ONNX, 320 ms chunk (the default) |
-| `LT_MAX_WORKERS` | 4 (the default: one per core) |
+| `LT_MAX_WORKERS` | 8 (the default here: 4 threads + 4) |
 | `LT_ASR_THREADS` | 1 (the default) |
 | Voice activity detection | on (the default) |
 | Audio | 48 kHz mono, 400 ms per chunk, as Talk delivers it |
@@ -92,10 +92,16 @@ captions fall progressively further behind.
 
 Size by *simultaneous speakers* and not by participants. More speakers need more
 cores or another server, and more memory does not help. `LT_MAX_WORKERS` bounds how
-many chunks decode at once, and a value above the core count does not add capacity,
-because it makes every speaker slower. Such a value is logged as a warning and then
-honoured, because the server cannot tell whether the host is shared with something
-else that the admin is sizing around.
+many chunks decode at once. It is a ceiling and not a reservation: a worker thread
+is created only when that many people speak at the same time, and an idle one costs
+nothing. The default is the CPU thread count plus 4, capped at 32, which is the
+formula Python uses for its own thread pools: the spare 4 covers workers that are
+between chunks rather than decoding, and the cap stops a large host promising a
+concurrency its memory cannot hold.
+
+Past the core count the decodes take turns. Those speakers are still transcribed,
+but every caption arrives progressively later, which is why the ceiling above is
+expressed in *concurrent speakers* and not in workers.
 
 Nothing is refused past the ceiling. Every speaker who connects is transcribed, and
 beyond the ceiling they all fall behind together rather than some being turned away.

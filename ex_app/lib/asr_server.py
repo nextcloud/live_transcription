@@ -32,10 +32,12 @@ content. A four-person call is then slower than realtime on a 4-core host.
 import asyncio
 import json
 import logging
+import math
 import os
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from pathlib import Path
 from urllib.parse import urlparse
 
 import numpy as np
@@ -59,7 +61,54 @@ ENGINE_RATE = 16000
 VAD_WINDOW = 512  # silero v5 frame size at 16 kHz; sherpa requires exactly this
 
 # How many gated chunks are replayed when the gate opens. See Session.__init__.
-PRE_SPEECH_CHUNKS = 2
+PRE_SPEECH_CHUNKS = 4
+
+# Close an utterance after this long even without a pause, because the other two
+# endpoint rules both wait for trailing silence and a speaker who does not pause
+# gets no caption until they do. The sherpa-onnx default is 20 s, which on 90 s
+# of continuous speech made a caption wait up to 20.4 s.
+#
+# Splitting costs accuracy, because the cut lands mid-sentence and the words
+# around it are decoded without their other half. Measured against the 20 s
+# transcript, 15 s diverged by 6.91 %, 12 s by 6.50 % and 10 s by 6.91 %: the
+# cost is paid by splitting at all and barely moves with the value, so take the
+# shortest wait rather than a middle value that pays the same and waits longer.
+MAX_UTTERANCE_SECONDS = 10.0
+
+
+def available_cores() -> int:
+	"""Cores this process may actually use.
+
+	None of the Python APIs see a CPU quota: in a container started with
+	``--cpus 2`` on a 4-core host, cpu_count(), process_cpu_count() and
+	sched_getaffinity() all still report 4, while the cgroup holds the process to
+	two cores' worth of runtime. Deployments pin ExApp containers that way, so the
+	quota is read first and the interpreter is only the fallback.
+	"""
+	try:
+		quota, period = Path("/sys/fs/cgroup/cpu.max").read_text().split()
+		if quota != "max" and int(period) > 0:
+			# A fractional quota still gets one whole worker to run on.
+			return max(1, math.ceil(int(quota) / int(period)))
+	except (OSError, ValueError):
+		pass
+	# process_cpu_count() landed in 3.13 and follows CPU affinity; cpu_count() is
+	# the portable fallback.
+	count = getattr(os, "process_cpu_count", os.cpu_count)
+	return count() or 1
+
+
+def default_max_workers() -> int:
+	"""Ceiling on simultaneous decodes when LT_MAX_WORKERS is unset.
+
+	The formula is CPython's own ThreadPoolExecutor default, and the one the Vosk
+	server used before this one. The spare 4 covers workers that are between
+	chunks rather than decoding, which keeps a 2-core host from serialising its
+	two speakers behind each other, and the cap keeps a 64-core host from
+	promising a concurrency its memory cannot hold.
+	"""
+	return min(32, available_cores() + 4)
+
 
 # Low-pass FIR that downsamples to ENGINE_RATE for the VAD. The recognizer
 # resamples internally, but the VAD does not. It reads every 512-sample window as
@@ -550,20 +599,26 @@ async def start():
 	recognizer = build_recognizer(model_dir)
 	LOGGER.info("Loaded the ASR model from %s", model_dir, extra={"tag": "asr"})
 
-	# This bounds how many decodes overlap and not how many speakers may connect.
-	# A single decode uses one thread, so the workers are what fills the cores.
-	# Above the core count the decodes only take turns, which adds latency without
-	# adding throughput. The value is still honoured, because the admin may know
-	# something this process cannot see, such as the container being one of
-	# several sharing the host.
-	cores = os.cpu_count() or 4
-	workers = max(1, _env_int("LT_MAX_WORKERS", cores))
+	# A ceiling on overlapping decodes, not a reservation: the pool creates a
+	# thread only when a chunk arrives with every existing one busy, and an idle
+	# thread parks on a queue rather than spinning. A call with two speakers
+	# therefore costs two threads whatever this is set to.
+	#
+	# It is set above the core count on purpose. One decode uses one thread, so
+	# beyond the cores the decodes take turns and each speaker gets slower, but
+	# taking turns is still better than refusing to decode: speech that is queued
+	# arrives late, speech that is never decoded is lost. The core count remains
+	# the number of speakers this host keeps up with in realtime, which is what
+	# the readme sizes against.
+	# _env_int already falls back when the variable is unset or empty.
+	workers = max(1, _env_int("LT_MAX_WORKERS", default_max_workers()))
+	cores = available_cores()
 	if workers > cores:
-		LOGGER.warning(
-			"LT_MAX_WORKERS=%d is above the %d cores available. One decode uses one "
-			"thread, so the extra workers only take turns and every speaker gets "
-			"slower rather than the server serving more of them.",
-			workers, cores, extra={"tag": "asr"},
+		LOGGER.info(
+			"Allowing %d concurrent decodes on %d cores. Threads are created on "
+			"demand, so this costs nothing until that many people speak at once, "
+			"and past %d speakers every caption arrives progressively later.",
+			workers, cores, cores, extra={"tag": "asr"},
 		)
 	pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="asr")
 
