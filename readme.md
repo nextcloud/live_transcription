@@ -150,8 +150,10 @@ C->S  {"eof": 1}
 S->C  {"text": "..."}
 ```
 
-`{"text": ...}` marks the end of an utterance and triggers translation.
-`{"partial": ...}` is an interim result for the same utterance.
+`{"text": ...}` is final text, which triggers translation. It is sent at a pause, and
+also after 10 s of speech without one, in which case it carries the words decided so
+far and the next partials continue from there.
+`{"partial": ...}` is interim text that follows the last final.
 
 ### Environment variables
 

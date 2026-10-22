@@ -63,17 +63,47 @@ VAD_WINDOW = 512  # silero v5 frame size at 16 kHz; sherpa requires exactly this
 # How many gated chunks are replayed when the gate opens. See Session.__init__.
 PRE_SPEECH_CHUNKS = 4
 
-# Close an utterance after this long even without a pause, because the other two
-# endpoint rules both wait for trailing silence and a speaker who does not pause
-# gets no caption until they do. The sherpa-onnx default is 20 s, which on 90 s
-# of continuous speech made a caption wait up to 20.4 s.
+# Send a final for the settled part of an utterance after this much audio
+# without one. Translation runs only on finals, and the endpoint rules wait for
+# a pause, thus a speaker who does not pause is otherwise not translated until
+# MAX_UTTERANCE_SECONDS.
 #
-# Splitting costs accuracy, because the cut lands mid-sentence and the words
-# around it are decoded without their other half. Measured against the 20 s
-# transcript, 15 s diverged by 6.91 %, 12 s by 6.50 % and 10 s by 6.91 %: the
-# cost is paid by splitting at all and barely moves with the value, so take the
-# shortest wait rather than a middle value that pays the same and waits longer.
-MAX_UTTERANCE_SECONDS = 10.0
+# This does not reset the stream. Greedy transducer search only appends tokens,
+# thus every word that a later token has started a new word after is settled,
+# and sending it as a final costs no accuracy. Shortening MAX_UTTERANCE_SECONDS
+# instead resets the decoder wherever the limit lands, which at 10 s cut
+# "country" to "coun" in an 11 s clip and lost the rest of the word.
+EARLY_FINAL_SECONDS = 10.0
+
+# The hard limit on an utterance. It resets the decoder wherever it lands, thus
+# it only bounds the per-utterance decoder result in a monologue. On 90 s of
+# speech the sherpa-onnx default of 20 s cut "humanity" to "hu", and 60 s lost
+# nothing.
+MAX_UTTERANCE_SECONDS = 60.0
+
+# Tokens that end a sentence. An early final prefers to stop after one of these.
+# The escapes are the CJK full stop, fullwidth ? and !, the Devanagari danda and
+# the Arabic question mark.
+SENTENCE_ENDS = (".", "?", "!", "\u3002", "\uff1f", "\uff01", "\u0964", "\u061f")
+
+
+def settled_end(tokens: list[str], start: int) -> int:
+	"""Index after the last token in tokens[start:] that later decoding cannot extend.
+
+	A word is complete once a following token starts a new one with a space. The
+	last word is never complete, because its next token may still continue it.
+	A sentence end is preferred, so that an early final reads as a sentence.
+	Scripts without spaces between words have only the sentence ends. Returns
+	start when nothing is settled.
+	"""
+	for i in range(len(tokens) - 2, start - 1, -1):
+		# A following digit means a decimal point, as in "3.5".
+		if tokens[i].rstrip().endswith(SENTENCE_ENDS) and not tokens[i + 1].lstrip()[:1].isdigit():
+			return i + 1
+	for i in range(len(tokens) - 1, start, -1):
+		if tokens[i].startswith(" "):
+			return i
+	return start
 
 
 def available_cores() -> int:
@@ -343,6 +373,10 @@ class Session:
 		# "Oh my fellow Americans". The cost of being generous is one extra chunk
 		# of silence decoded per utterance.
 		self.__pre_speech: deque[np.ndarray] = deque(maxlen=PRE_SPEECH_CHUNKS)
+		# Tokens of the current utterance already sent in an early final, and the
+		# seconds of audio decoded since the last final of either kind.
+		self.__sent_tokens = 0
+		self.__since_final = 0.0
 		self.__language = DEFAULT_LANGUAGE
 		self.__sample_rate = 48000
 
@@ -367,6 +401,8 @@ class Session:
 		self.__vad_tail = np.empty(0, dtype=np.float32)
 		self.__between_utterances = True
 		self.__pre_speech.clear()
+		self.__sent_tokens = 0
+		self.__since_final = 0.0
 
 		# The VAD reads every 512-sample window as 32 ms at ENGINE_RATE, thus audio
 		# must arrive at exactly that rate. An integer ratio covers what WebRTC
@@ -451,13 +487,19 @@ class Session:
 			return "", False
 
 		while self.__pre_speech:
-			self.__stream.accept_waveform(self.__sample_rate, self.__pre_speech.popleft())
+			replay = self.__pre_speech.popleft()
+			self.__since_final += replay.size / self.__sample_rate
+			self.__stream.accept_waveform(self.__sample_rate, replay)
 		self.__stream.accept_waveform(self.__sample_rate, pcm)
+		self.__since_final += pcm.size / self.__sample_rate
 		while self.__recognizer.is_ready(self.__stream):
 			self.__recognizer.decode_stream(self.__stream)
 
-		# Read the result BEFORE reset(), which discards the segment's text.
-		text = self.__recognizer.get_result(self.__stream)
+		# Read the result BEFORE reset(), which discards the segment's text. The
+		# tokens are joined rather than read from .text, because the early final
+		# cuts by token. Both are identical, as no inverse text normalisation or
+		# homophone replacer is configured.
+		tokens = self.__recognizer.get_result_all(self.__stream).tokens
 		if self.__recognizer.is_endpoint(self.__stream):
 			# reset() and not a new stream. It restores the encoder and decoder to
 			# their initial states but deliberately keeps the feature extractor,
@@ -468,9 +510,20 @@ class Session:
 			# costs accuracy exactly where the model is strongest.
 			self.__recognizer.reset(self.__stream)
 			self.__between_utterances = True
+			text = "".join(tokens[self.__sent_tokens:])
+			self.__sent_tokens = 0
+			self.__since_final = 0.0
 			return text, True
 		self.__between_utterances = False
-		return text, False
+
+		if self.__since_final >= EARLY_FINAL_SECONDS:
+			end = settled_end(tokens, self.__sent_tokens)
+			if end > self.__sent_tokens:
+				text = "".join(tokens[self.__sent_tokens:end])
+				self.__sent_tokens = end
+				self.__since_final = 0.0
+				return text, True
+		return "".join(tokens[self.__sent_tokens:]), False
 
 	async def feed(self, frame: bytes) -> str:
 		if self.__stream is None:
@@ -499,7 +552,8 @@ class Session:
 		self.__stream.input_finished()
 		while self.__recognizer.is_ready(self.__stream):
 			self.__recognizer.decode_stream(self.__stream)
-		return self.__recognizer.get_result(self.__stream)
+		tokens = self.__recognizer.get_result_all(self.__stream).tokens
+		return "".join(tokens[self.__sent_tokens:])
 
 	async def flush(self) -> str:
 		text = await self.__run(self.__finalise)
