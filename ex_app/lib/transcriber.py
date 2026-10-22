@@ -55,6 +55,9 @@ class Transcriber:
 					"ssl": ssl_ctx,
 				} if ssl_ctx else {}),
 				open_timeout=ASR_CONNECT_TIMEOUT,
+				# PCM barely compresses (to 0.76 of its size) and deflating it costs
+				# CPU on both ends, so do not offer permessage-deflate.
+				compression=None,
 			)
 			await self.__asrcon.send(
 				json.dumps({

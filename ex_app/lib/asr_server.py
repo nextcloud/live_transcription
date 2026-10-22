@@ -679,7 +679,10 @@ async def start():
 	async def handler(websocket: ws.ServerConnection):
 		await recognize(websocket, recognizer, pool, vad_model)
 
-	async with ws.serve(handler, interface, port, max_size=None):
+	# compression=None: PCM barely compresses, to 0.76 of its size, and the
+	# deflate cost lands on the event loop. An external client may still offer
+	# permessage-deflate, thus the server refuses it as well.
+	async with ws.serve(handler, interface, port, max_size=None, compression=None):
 		LOGGER.info(
 			"ASR server listening on ws://%s:%d (%d workers, %d threads per decode)",
 			interface, port, workers, _env_int("LT_ASR_THREADS", 1),
