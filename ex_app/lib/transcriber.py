@@ -183,7 +183,7 @@ class Transcriber:
 	async def __run_audio_xfer(self, stream: AudioStream):  # noqa: C901
 		frames = []
 		# pre-allocate buffer to avoid repeated heap allocation
-		# 960 samples * 2 bytes * 20 frames = 38400 bytes typical size.
+		# 960 samples * 2 bytes * MAX_AUDIO_FRAMES is the typical size.
 		dataframes = bytearray(960 * 2 * MAX_AUDIO_FRAMES)
 		dataframes_len = 0
 		last_sent = 0.0

@@ -46,7 +46,7 @@ chunk size, or other languages.
 | `LT_MAX_WORKERS` | 4 (the default: one per core) |
 | `LT_ASR_THREADS` | 1 (the default) |
 | Voice activity detection | on (the default) |
-| Audio | 48 kHz mono, 400 ms per chunk, as Talk delivers it |
+| Audio | 48 kHz mono, 320 ms per chunk, as the app sends it |
 
 Each participant holds one websocket connection. In the measurement every speaker
 used a **different recording in a different language**, thus no two streams shared a
@@ -76,17 +76,22 @@ Do not budget per participant.
 **Speed is the real limit**
 
 Memory is nearly identical whether one person speaks or four, but responsiveness is
-not. Each speaker sent a different recording in 400 ms chunks, paced in real time
-for 20 s, and waited for each reply as the app does. "Behind" is how far the last
-reply trailed the end of the audio:
+not. Each speaker sent a different recording paced in real time for 20 s, and
+waited for each reply as the app does. "Behind" is how far the last reply trailed
+the end of the audio:
 
-| Speaking | Reply delay (p95) | Behind | Keeps pace |
-|---|---|---|---|
-| 2 | 0.19 s | 0.18 s | yes |
-| 4 | 0.20 s | 0.22 s | yes |
-| 8 | 0.37 s | 0.37 s | yes |
-| 12 | 0.47 s | 0.50 s | yes |
-| 16 | 0.63 s | 0.68 s | yes |
+| Speaking | Chunk | Reply delay (p95) | Behind | Keeps pace |
+|---|---|---|---|---|
+| 4 | 320 ms | 0.12 s | 0.00 s | yes |
+| 16 | 320 ms | 0.37 s | 0.26 s | yes |
+| 2 | 400 ms | 0.19 s | 0.18 s | yes |
+| 4 | 400 ms | 0.20 s | 0.22 s | yes |
+| 8 | 400 ms | 0.37 s | 0.37 s | yes |
+| 12 | 400 ms | 0.47 s | 0.50 s | yes |
+| 16 | 400 ms | 0.63 s | 0.68 s | yes |
+
+The app sends 320 ms chunks because that is the model's own chunk, thus every send
+completes one decode and no audio waits for the next send.
 
 Up to one speaker per core, each one is decoded on its own lane. Past that, a free
 lane decodes all the speakers waiting for it in one batch, which shares the cost
