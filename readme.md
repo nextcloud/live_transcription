@@ -178,17 +178,19 @@ docker build --target runtime-cuda -t live_transcription:cuda .
 The CPU image needs no GPU libraries at all, so it stays around 810 MB. The CUDA
 image is larger, because the CUDA runtime and cuDNN alone are over a gigabyte.
 
-**Why CUDA is compiled rather than installed.** sherpa-onnx on PyPI is CPU-only,
-and asking a CPU wheel for the CUDA provider falls back to the CPU silently
-rather than failing. The `sherpa-builder-cuda` stage therefore compiles the wheel
-from the sdist with `SHERPA_ONNX_ENABLE_GPU=ON`, and only the finished wheel is
-copied into the runtime image, which keeps the CUDA toolkit and the compiler out
-of what you ship.
+**Why the CUDA image installs a different wheel.** sherpa-onnx on PyPI is
+CPU-only, and asking a CPU wheel for the CUDA provider falls back to the CPU
+silently rather than failing. The CUDA image therefore installs the CUDA wheel
+that upstream publishes at <https://k2-fsa.github.io/sherpa/onnx/cuda.html>.
+`SHERPA_ONNX_VERSION` selects the release. When you change it, also change the
+pin in `requirements.txt`, and set `SHERPA_ONNX_CUDA_ORT_VERSION` to the
+onnxruntime version in the new wheel's file name.
 
 **Why the `cudnn-` tags.** The CUDA execution provider links against
 `libcudnn.so.9`, which the plain `devel` and `runtime` CUDA images do not carry.
-Only the `cudnn-` flavours ship it, thus both the builder and the runtime use
-them. With a non-cudnn base the provider fails to load at runtime and the server
+Only the `cudnn-` flavours ship it. The base is CUDA 12.8, because 12.4 to 12.6
+lack symbols that the 1.13.8 wheel imports from `libcudart`. With a base that is
+too old or lacks cuDNN, the provider fails to load at runtime and the server
 falls back to the CPU, which looks like a GPU that is simply slow.
 
 Run the CUDA image with the NVIDIA container runtime, for example
