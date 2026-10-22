@@ -61,11 +61,52 @@ class Transcriber:
 					"config": {
 						"sample_rate": 48000,
 						"language": self.__language,
-						# "show_words": True,
 					}
 				})
 			)
-			# todo: wait for language set confirmation
+			# Read the reply here. Left unread, it answers the first audio frame and
+			# every later reply arrives one frame late.
+			try:
+				await self.__await_config_ack()
+			except BaseException:
+				with suppress(Exception):
+					await self.__asrcon.close()
+				self.__asrcon = None
+				raise
+
+	async def __await_config_ack(self) -> None:
+		"""Read replies until the one to a config message, and raise unless it reports success.
+
+		Replies to audio frames already in flight may arrive first, thus up to
+		MAX_CONNECT_TRIES of them are skipped. The caller holds __asrcon_lock.
+		"""
+		if not self.__asrcon:
+			raise ASRException("ASR connection is not established")
+		for _ in range(MAX_CONNECT_TRIES):
+			response = await self.__asrcon.recv()
+			try:
+				json_res = json.loads(response)
+			except json.JSONDecodeError as e:
+				raise ASRException("Error decoding JSON response from ASR server after a config message") from e
+			if not isinstance(json_res, dict) or "success" not in json_res:
+				continue
+			LOGGER.debug("Response from ASR server to a config message", extra={
+				"recv_response": response,
+				"session_id": self.__session_id,
+				"tag": "asr",
+			})
+			if not json_res["success"]:
+				raise ASRException(f"ASR server rejected the configuration for language {self.__language!r}")
+			return
+		LOGGER.error(
+			"Max received messages limit reached while waiting for ASR server response. "
+			"Expected 'success' in response from ASR server after a config message.",
+			extra={
+				"session_id": self.__session_id,
+				"tag": "asr",
+			},
+		)
+		raise ASRException("ASR server did not respond in an expected fashion after a config message")
 
 	async def start(self, stream: AudioStream):
 		if self.audio_task and not self.audio_task.done():
