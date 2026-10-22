@@ -20,9 +20,10 @@ call.
 
 All the connections share one ``OnlineRecognizer``. Per-speaker state lives in the
 ``OnlineStream``, which costs approximately 1 MiB, but a second recognizer reloads
-the weights and costs approximately 730 MiB. Decoding runs in a bounded thread
-pool, because ``decode_stream`` releases the GIL and would otherwise block the
-event loop for every other speaker in the call.
+the weights and costs approximately 730 MiB. Decoding runs on ``Lanes``, a fixed
+set of threads that batch the speakers waiting for them, because decoding
+releases the GIL and would otherwise block the event loop for every other
+speaker in the call.
 
 A silero VAD gates each stream. Without it, a silent participant costs 85 % to
 95 % of the CPU time of a speaking one, because the encoder runs regardless of
@@ -34,8 +35,10 @@ import json
 import logging
 import math
 import os
+import queue
+import threading
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from urllib.parse import urlparse
@@ -129,15 +132,16 @@ def available_cores() -> int:
 
 
 def default_max_workers() -> int:
-	"""Ceiling on simultaneous decodes when LT_MAX_WORKERS is unset.
+	"""Number of decode lanes when LT_MAX_WORKERS is unset: one per core.
 
-	The formula is CPython's own ThreadPoolExecutor default, and the one the Vosk
-	server used before this one. The spare 4 covers workers that are between
-	chunks rather than decoding, which keeps a 2-core host from serialising its
-	two speakers behind each other, and the cap keeps a 64-core host from
-	promising a concurrency its memory cannot hold.
+	A lane batches whatever is waiting when it becomes free, thus a lane per
+	core keeps every core busy, and speakers beyond the lanes share a batch
+	rather than a turn. More lanes than cores defeats that: the queue rarely
+	holds more jobs than lanes, so nothing batches and the decodes only take
+	turns on the cores. With 16 speakers on a 4-core host, 8 lanes fell 6.7 s
+	behind realtime in 20 s, and 4 lanes kept pace at 0.7 s.
 	"""
-	return min(32, available_cores() + 4)
+	return available_cores()
 
 
 # Low-pass FIR that downsamples to ENGINE_RATE for the VAD. The recognizer
@@ -337,17 +341,117 @@ def build_vad(vad_model: str) -> sherpa_onnx.VoiceActivityDetector | None:
 	return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=30)
 
 
+class Lanes:
+	"""Decode threads that batch the streams waiting for them.
+
+	Each lane is a thread that takes every job waiting in the shared queue and
+	runs the streams those jobs fed through one decode_streams() call. A batch
+	shares one encoder run across its streams, which is cheaper than decoding
+	them one by one. Measured on a 4-core host with 16 speakers sending 400 ms
+	chunks in real time for 20 s, a thread pool of 8 used 100.8 CPU seconds and
+	fell 7.4 s behind, and 4 lanes used 76.2 and stayed within 0.7 s.
+
+	With no more waiting streams than lanes, every batch holds one stream and
+	this is the same as a thread pool. Batching starts only when speakers
+	outnumber the lanes, which is also when the plain pool falls behind.
+
+	A batched stream's result is not identical to decoding it alone, because the
+	int8 encoder quantises activations with one scale per batch. Scored against
+	the 1120 ms model on the same audio, the word error rate moved from 7.69 % to
+	8.60 % with 8 speakers and stayed at 10.62 % with 4. That is the price of
+	keeping up, and it is paid only past one speaker per core.
+	"""
+
+	def __init__(self, recognizer: sherpa_onnx.OnlineRecognizer, count: int):
+		self.__recognizer = recognizer
+		self.__count = count
+		self.__jobs: queue.SimpleQueue = queue.SimpleQueue()
+		for i in range(count):
+			threading.Thread(target=self.__work, name=f"asr-{i}", daemon=True).start()
+
+	async def submit(
+		self,
+		ingest: Callable[[], sherpa_onnx.OnlineStream | None] | None,
+		collect: Callable[[bool], object],
+	):
+		"""Run ingest, decode the stream it returns, then return collect(decoded).
+
+		ingest feeds audio and returns the stream to decode, or None to skip the
+		decode. Pass None to only run collect on a lane, for state changes that
+		must not overlap a decode of the same stream.
+		"""
+		loop = asyncio.get_running_loop()
+		future = loop.create_future()
+		self.__jobs.put((ingest, collect, loop, future))
+		return await future
+
+	def __work(self):
+		while True:
+			jobs = [self.__jobs.get()]
+			# Take this lane's share of what is waiting, not all of it. One lane
+			# holding every stream leaves the others idle: offline, a single batch
+			# of 8 took 782 ms at p95 per 400 ms chunk, and 4 batches of 2 316 ms.
+			share = math.ceil((1 + self.__jobs.qsize()) / self.__count)
+			with suppress(queue.Empty):
+				while len(jobs) < share:
+					jobs.append(self.__jobs.get_nowait())
+
+			streams: list[sherpa_onnx.OnlineStream | None] = []
+			errors: list[BaseException | None] = []
+			for ingest, _, _, _ in jobs:
+				try:
+					streams.append(ingest() if ingest else None)
+					errors.append(None)
+				except BaseException as e:  # noqa: BLE001
+					streams.append(None)
+					errors.append(e)
+
+			batch_error: BaseException | None = None
+			try:
+				ready = [s for s in streams if s is not None and self.__recognizer.is_ready(s)]
+				while ready:
+					if len(ready) == 1:
+						self.__recognizer.decode_stream(ready[0])
+					else:
+						self.__recognizer.decode_streams(ready)
+					ready = [s for s in ready if self.__recognizer.is_ready(s)]
+			except BaseException as e:  # noqa: BLE001
+				batch_error = e
+
+			for (_, collect, loop, future), stream, error in zip(jobs, streams, errors, strict=True):
+				error = error or batch_error
+				if error is None:
+					try:
+						result = collect(stream is not None)
+					except BaseException as e:  # noqa: BLE001
+						error = e
+				if error is None:
+					loop.call_soon_threadsafe(_resolve, future, result, None)
+				else:
+					loop.call_soon_threadsafe(_resolve, future, None, error)
+
+
+def _resolve(future: asyncio.Future, result, error: BaseException | None):
+	# The awaiting connection may have closed, which cancels its future.
+	if future.done():
+		return
+	if error is None:
+		future.set_result(result)
+	else:
+		future.set_exception(error)
+
+
 class Session:
 	"""Per-connection decoding state: one speaker, one language."""
 
 	def __init__(
 		self,
 		recognizer: sherpa_onnx.OnlineRecognizer,
-		pool: ThreadPoolExecutor,
+		lanes: "Lanes",
 		vad_model: str,
 	):
 		self.__recognizer = recognizer
-		self.__pool = pool
+		self.__lanes = lanes
 		self.__vad_model = vad_model
 		self.__stream: sherpa_onnx.OnlineStream | None = None
 		# The VAD holds speech and silence state, thus it cannot be shared between
@@ -385,7 +489,7 @@ class Session:
 		return self.__language
 
 	async def __run(self, fn, *args):
-		return await asyncio.get_running_loop().run_in_executor(self.__pool, fn, *args)
+		return await self.__lanes.submit(None, lambda _decoded: fn(*args))
 
 	def __create_stream(self) -> sherpa_onnx.OnlineStream:
 		stream = self.__recognizer.create_stream()
@@ -470,10 +574,9 @@ class Session:
 
 		return self.__vad.is_speech_detected()
 
-	def __decode(self, pcm: np.ndarray) -> tuple[str, bool]:
-		if self.__stream is None:
-			LOGGER.warning("Empty recognizer stream encountered while trying to decode incoming frames")
-			return "", False
+	def __ingest(self, pcm: np.ndarray) -> sherpa_onnx.OnlineStream | None:
+		"""Feed a chunk, and return the stream if it now needs decoding."""
+		assert self.__stream is not None
 
 		# The endpoint timer runs on DECODED frames, because only decode_stream
 		# advances `num_trailing_blanks` and `num_processed_frames`. Thus an open
@@ -484,7 +587,7 @@ class Session:
 		# at the next word, so the cost is deferred and not avoided.
 		if self.__between_utterances and not self.__has_speech(pcm):
 			self.__pre_speech.append(pcm)
-			return "", False
+			return None
 
 		while self.__pre_speech:
 			replay = self.__pre_speech.popleft()
@@ -492,8 +595,12 @@ class Session:
 			self.__stream.accept_waveform(self.__sample_rate, replay)
 		self.__stream.accept_waveform(self.__sample_rate, pcm)
 		self.__since_final += pcm.size / self.__sample_rate
-		while self.__recognizer.is_ready(self.__stream):
-			self.__recognizer.decode_stream(self.__stream)
+		return self.__stream
+
+	def __collect(self, decoded: bool) -> tuple[str, bool]:
+		"""Read the result of the chunk that __ingest fed."""
+		if not decoded or self.__stream is None:
+			return "", False
 
 		# Read the result BEFORE reset(), which discards the segment's text. The
 		# tokens are joined rather than read from .text, because the early final
@@ -530,7 +637,8 @@ class Session:
 			await self.__run(self.__reset_stream)
 
 		pcm = np.frombuffer(frame, dtype=np.int16).astype(np.float32) / 32768.0
-		text, is_final = await self.__run(self.__decode, np.ascontiguousarray(pcm))
+		pcm = np.ascontiguousarray(pcm)
+		text, is_final = await self.__lanes.submit(lambda: self.__ingest(pcm), self.__collect)
 
 		if is_final:
 			if text.strip():
@@ -570,10 +678,10 @@ class Session:
 async def recognize(
 	websocket: ws.ServerConnection,
 	recognizer: sherpa_onnx.OnlineRecognizer,
-	pool: ThreadPoolExecutor,
+	lanes: "Lanes",
 	vad_model: str,
 ):
-	session = Session(recognizer, pool, vad_model)
+	session = Session(recognizer, lanes, vad_model)
 	LOGGER.debug("Connection from %s", websocket.remote_address, extra={"tag": "asr"})
 
 	try:
@@ -653,31 +761,20 @@ async def start():
 	recognizer = build_recognizer(model_dir)
 	LOGGER.info("Loaded the ASR model from %s", model_dir, extra={"tag": "asr"})
 
-	# A ceiling on overlapping decodes, not a reservation: the pool creates a
-	# thread only when a chunk arrives with every existing one busy, and an idle
-	# thread parks on a queue rather than spinning. A call with two speakers
-	# therefore costs two threads whatever this is set to.
-	#
-	# It is set above the core count on purpose. One decode uses one thread, so
-	# beyond the cores the decodes take turns and each speaker gets slower, but
-	# taking turns is still better than refusing to decode: speech that is queued
-	# arrives late, speech that is never decoded is lost. The core count remains
-	# the number of speakers this host keeps up with in realtime, which is what
-	# the readme sizes against.
 	# _env_int already falls back when the variable is unset or empty.
 	workers = max(1, _env_int("LT_MAX_WORKERS", default_max_workers()))
 	cores = available_cores()
 	if workers > cores:
-		LOGGER.info(
-			"Allowing %d concurrent decodes on %d cores. Threads are created on "
-			"demand, so this costs nothing until that many people speak at once, "
-			"and past %d speakers every caption arrives progressively later.",
-			workers, cores, cores, extra={"tag": "asr"},
+		LOGGER.warning(
+			"LT_MAX_WORKERS=%d is above the %d cores available. Extra lanes take "
+			"turns on the cores instead of batching speakers, which lowers how "
+			"many people can speak at once before captions fall behind.",
+			workers, cores, extra={"tag": "asr"},
 		)
-	pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="asr")
+	lanes = Lanes(recognizer, workers)
 
 	async def handler(websocket: ws.ServerConnection):
-		await recognize(websocket, recognizer, pool, vad_model)
+		await recognize(websocket, recognizer, lanes, vad_model)
 
 	# compression=None: PCM barely compresses, to 0.76 of its size, and the
 	# deflate cost lands on the event loop. An external client may still offer

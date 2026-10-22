@@ -43,7 +43,7 @@ chunk size, or other languages.
 | CPU | 4 cores, x86-64, **no GPU** |
 | RAM | 12 GB |
 | Model | `nemotron-3.5-asr-streaming-0.6b`, int8 ONNX, 320 ms chunk (the default) |
-| `LT_MAX_WORKERS` | 8 (the default here: 4 threads + 4) |
+| `LT_MAX_WORKERS` | 4 (the default: one per core) |
 | `LT_ASR_THREADS` | 1 (the default) |
 | Voice activity detection | on (the default) |
 | Audio | 48 kHz mono, 400 ms per chunk, as Talk delivers it |
@@ -76,35 +76,34 @@ Do not budget per participant.
 **Speed is the real limit**
 
 Memory is nearly identical whether one person speaks or four, but responsiveness is
-not. The server must transcribe a 400 ms chunk in under 400 ms to keep pace:
+not. Each speaker sent a different recording in 400 ms chunks, paced in real time
+for 20 s, and waited for each reply as the app does. "Behind" is how far the last
+reply trailed the end of the audio:
 
-| Participants | Speaking | Reply delay (p95) | Keeps pace |
+| Speaking | Reply delay (p95) | Behind | Keeps pace |
 |---|---|---|---|
-| any | 1 | 0.21 s | yes |
-| any | 4 | 0.32 s | yes |
-| any | 6 | 0.45 s | **no** |
-| any | 8 | 0.61 s | **no** |
+| 2 | 0.19 s | 0.18 s | yes |
+| 4 | 0.20 s | 0.22 s | yes |
+| 8 | 0.37 s | 0.37 s | yes |
+| 12 | 0.47 s | 0.50 s | yes |
+| 16 | 0.63 s | 0.68 s | yes |
 
-On this host the ceiling is **four people speaking at the same time**, which is the
-core count. One or two concurrent speakers, the normal shape of a meeting, leaves
-comfortable headroom. Beyond the ceiling the delay grows without bound and the
-captions fall progressively further behind.
+Up to one speaker per core, each one is decoded on its own lane. Past that, a free
+lane decodes all the speakers waiting for it in one batch, which shares the cost
+of the encoder. With 16 speakers that used 76 CPU seconds, against 101 seconds and
+a 7.4 s lag for the earlier server that gave each speaker its own turn. Batching
+costs some accuracy: scored against the slower 1120 ms model, the word error rate
+of 8 batched speakers went from 7.7 % to 8.6 %.
 
 Size by *simultaneous speakers* and not by participants. More speakers need more
-cores or another server, and more memory does not help. `LT_MAX_WORKERS` bounds how
-many chunks decode at once. It is a ceiling and not a reservation: a worker thread
-is created only when that many people speak at the same time, and an idle one costs
-nothing. The default is the CPU thread count plus 4, capped at 32, which is the
-formula Python uses for its own thread pools: the spare 4 covers workers that are
-between chunks rather than decoding, and the cap stops a large host promising a
-concurrency its memory cannot hold.
+cores or another server, and more memory does not help. `LT_MAX_WORKERS` sets the
+number of decode lanes, and the default is one per core. Leave it there: a lane
+beyond the cores rarely finds more than one speaker waiting, so it takes turns on
+the cores instead of batching. With 16 speakers, 8 lanes fell 6.7 s behind where
+4 lanes kept pace.
 
-Past the core count the decodes take turns. Those speakers are still transcribed,
-but every caption arrives progressively later, which is why the ceiling above is
-expressed in *concurrent speakers* and not in workers.
-
-Nothing is refused past the ceiling. Every speaker who connects is transcribed, and
-beyond the ceiling they all fall behind together rather than some being turned away.
+Nothing is refused. Every speaker who connects is transcribed, and past what the
+host can carry they all fall behind together rather than some being turned away.
 
 `LT_ASR_THREADS` is the other half of that budget, and it is the one worth leaving
 alone. It sets how many threads decode a *single* chunk, so the two multiply: the
