@@ -13,5 +13,6 @@ srt
 # no pypi release since a long time
 supervisor @ git+https://github.com/Supervisor/supervisor.git@7b4190831a5162f5b26a72a039770ad4dfb5f6a2
 uvicorn
-sherpa-onnx
+# Keep in step with SHERPA_ONNX_VERSION in the Dockerfile.
+sherpa-onnx==1.13.8
 websockets

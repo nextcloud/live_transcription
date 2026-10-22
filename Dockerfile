@@ -165,7 +165,7 @@ COPY requirements.txt /
 RUN --mount=type=cache,target=/root/.cache/pip \
     /venv/bin/python3 -m pip install --root-user-action=ignore \
         --no-index --find-links=/wheels sherpa-onnx \
-    && sed -i '/^sherpa-onnx$/d' requirements.txt \
+    && sed -i '/^sherpa-onnx==/d' requirements.txt \
     && /venv/bin/python3 -m pip install --root-user-action=ignore -r requirements.txt \
     && rm -rf /wheels requirements.txt
 
