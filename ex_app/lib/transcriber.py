@@ -67,18 +67,20 @@ class Transcriber:
 			# Read the reply here. Left unread, it answers the first audio frame and
 			# every later reply arrives one frame late.
 			try:
-				await self.__await_config_ack()
+				await self.__await_config_ack(self.__language)
 			except BaseException:
 				with suppress(Exception):
 					await self.__asrcon.close()
 				self.__asrcon = None
 				raise
 
-	async def __await_config_ack(self) -> None:
+	async def __await_config_ack(self, language: str) -> None:
 		"""Read replies until the one to a config message, and raise unless it reports success.
 
 		Replies to audio frames already in flight may arrive first, thus up to
-		MAX_CONNECT_TRIES of them are skipped. The caller holds __asrcon_lock.
+		MAX_CONNECT_TRIES of them are skipped. Each reply is parsed as JSON before
+		the key is looked up, because a partial transcript can contain the word
+		"success". The caller holds __asrcon_lock.
 		"""
 		if not self.__asrcon:
 			raise ASRException("ASR connection is not established")
@@ -96,7 +98,7 @@ class Transcriber:
 				"tag": "asr",
 			})
 			if not json_res["success"]:
-				raise ASRException(f"ASR server rejected the configuration for language {self.__language!r}")
+				raise ASRException(f"ASR server rejected the configuration for language {language!r}")
 			return
 		LOGGER.error(
 			"Max received messages limit reached while waiting for ASR server response. "
@@ -166,35 +168,7 @@ class Transcriber:
 					}
 				})
 			)
-			response = None
-			max_received_msgs = MAX_CONNECT_TRIES
-			while (not response or "success" not in response) and max_received_msgs > 0:
-				response = await self.__asrcon.recv()
-				max_received_msgs -= 1
-			if not response or "success" not in response:
-				LOGGER.error(
-					"Max received messages limit reached while waiting for ASR server response. "
-					"Expected 'success' in response from ASR server after switching language.",
-					response, extra={
-						"recv_response": response,
-						"session_id": self.__session_id,
-						"tag": "asr",
-					},
-				)
-				raise ASRException("ASR server did not respond in an expected fashion after switching language")
-
-			LOGGER.debug("Response from ASR server after switching language", extra={
-				"recv_response": response,
-				"session_id": self.__session_id,
-				"tag": "asr",
-			})
-			try:
-				json_res = json.loads(response)
-			except json.JSONDecodeError as e:
-				raise ASRException("Error decoding JSON response from ASR server after switching language") from e
-			ret = json_res.get("success", False)
-			if not ret:
-				raise ASRException("ASR server did not confirm language switch successfully")
+			await self.__await_config_ack(language)
 			LOGGER.debug("ASR language switched to %s successfully", LANGUAGE_MAP[language].name, extra={
 				"language": language,
 				"session_id": self.__session_id,
