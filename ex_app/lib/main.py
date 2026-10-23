@@ -43,6 +43,7 @@ from logger import get_logging_config, setup_logging
 from meta_translator import MetaTranslator
 from models import (
 	MODEL_DIR_NAME,
+	MODEL_FILES_PATTERNS,
 	MODEL_REPO,
 	MODEL_REVISION,
 	SUPPORTED_LANGUAGE_MAP,
@@ -63,7 +64,7 @@ MODELS_TO_FETCH: dict[str, dict] = {
 	MODEL_REPO: {
 		"local_dir": os.path.join(persistent_storage(), MODEL_DIR_NAME),
 		"revision": MODEL_REVISION,
-		"allow_patterns": ["*.int8.onnx", "tokens.txt"],
+		"allow_patterns": sorted({name for files in MODEL_FILES_PATTERNS.values() for name in files.values()}),
 	},
 	VAD_MODEL_URL: {
 		"save_path": os.path.join(persistent_storage(), VAD_MODEL_NAME),

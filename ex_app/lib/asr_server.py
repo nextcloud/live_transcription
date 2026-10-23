@@ -47,7 +47,7 @@ import numpy as np
 import sherpa_onnx
 import websockets as ws
 from dotenv import load_dotenv
-from models import LANGUAGE_PROMPTS, MODEL_DIR_NAME, VAD_MODEL_NAME
+from models import LANGUAGE_PROMPTS, MODEL_DIR_NAME, MODEL_FILES_PATTERNS, VAD_MODEL_NAME
 from nc_py_api.ex_app import persistent_storage
 
 load_dotenv()
@@ -218,9 +218,13 @@ def _env_int(name: str, default: int) -> int:
 		return default
 
 
-def model_suffix() -> str:
-	"""int8 by default. The fp32 export trades disk space for accuracy."""
-	return ".int8.onnx" if os.environ.get("LT_ASR_INT8", "true").lower() in ("1", "true") else ".onnx"
+def model_paths(model_dir: str) -> dict[str, str] | None:
+	"""Paths of the first export in MODEL_FILES_PATTERNS whose files all exist."""
+	for files in MODEL_FILES_PATTERNS.values():
+		paths = {role: os.path.join(model_dir, name) for role, name in files.items()}
+		if all(os.path.exists(p) for p in paths.values()):
+			return paths
+	return None
 
 
 async def wait_for_model(model_dir: str):
@@ -231,21 +235,14 @@ async def wait_for_model(model_dir: str):
 	the container reports healthy. Exiting here would burn the whole download
 	window in restarts, thus it waits for the files instead.
 	"""  # noqa
-	suffix = model_suffix()
-	needed = [
-		os.path.join(model_dir, "tokens.txt"),
-		os.path.join(model_dir, f"encoder{suffix}"),
-		os.path.join(model_dir, f"decoder{suffix}"),
-		os.path.join(model_dir, f"joiner{suffix}"),
-	]
 	announced = False
 	sizes: dict[str, int] = {}
 	while True:
-		missing = [p for p in needed if not os.path.exists(p)]
-		if not missing:
+		paths = model_paths(model_dir)
+		if paths:
 			# huggingface_hub writes in place, thus require two consecutive
 			# identical sizes before treating a file as complete.
-			current = {p: os.path.getsize(p) for p in needed}
+			current = {p: os.path.getsize(p) for p in paths.values()}
 			if current == sizes and all(current.values()):
 				return
 			sizes = current
@@ -295,16 +292,11 @@ def build_recognizer(model_dir: str) -> sherpa_onnx.OnlineRecognizer:
 	------
 		FileNotFoundError: when a model file is missing
 	"""  # noqa
-	suffix = model_suffix()
-	paths = {
-		"tokens": os.path.join(model_dir, "tokens.txt"),
-		"encoder": os.path.join(model_dir, f"encoder{suffix}"),
-		"decoder": os.path.join(model_dir, f"decoder{suffix}"),
-		"joiner": os.path.join(model_dir, f"joiner{suffix}"),
-	}
-	for name, path in paths.items():
-		if not os.path.exists(path):
-			raise FileNotFoundError(f"ASR model file missing ({name}): {path}")
+	paths = model_paths(model_dir)
+	if paths is None:
+		raise FileNotFoundError(f"No complete ASR model export in {model_dir}")
+	# onnxruntime reads encoder.data from next to encoder.onnx by itself.
+	paths.pop("encoder_data", None)
 
 	provider = "cuda" if os.environ.get("COMPUTE_DEVICE", "cpu").lower() == "cuda" else "cpu"
 	if provider == "cuda":

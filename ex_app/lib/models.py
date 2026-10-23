@@ -11,6 +11,33 @@ MODEL_REPO = "csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8
 MODEL_REVISION = "424ce58898995b713f84341f2e1492f9207a26aa"
 MODEL_DIR_NAME = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8"
 
+# The files of each export of the model, by the role sherpa-onnx gives them, in
+# the order the ASR server prefers them. It loads the first export whose files
+# are all present.
+#
+# The app downloads every name here, and a name that the pinned repository does
+# not have is skipped, so the same table serves both repositories. The pinned one
+# ships int8 weights only. The fp32 export is the repository of the same name
+# without "-int8", and it keeps the encoder weights in encoder.data, which must
+# finish downloading before the encoder can load. Measured against that fp32
+# export on 90 s of speech, int8 diverged by 2.9 % while using a third of the
+# disk, a third of the memory and 0.27 RTF against 0.43.
+MODEL_FILES_PATTERNS: dict[str, dict[str, str]] = {
+	"int8": {
+		"tokens": "tokens.txt",
+		"encoder": "encoder.int8.onnx",
+		"decoder": "decoder.int8.onnx",
+		"joiner": "joiner.int8.onnx",
+	},
+	"fp32": {
+		"tokens": "tokens.txt",
+		"encoder": "encoder.onnx",
+		"encoder_data": "encoder.data",
+		"decoder": "decoder.onnx",
+		"joiner": "joiner.onnx",
+	},
+}
+
 # Silero VAD, used to keep silent participants off the decoder.
 VAD_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 VAD_MODEL_NAME = "silero_vad.onnx"
