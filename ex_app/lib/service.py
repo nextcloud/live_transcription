@@ -17,6 +17,7 @@ from livetypes import (
 	TranscriptTargetNotFoundException,
 	TranslateException,
 )
+from models import supported_language
 from spreed_client import SpreedClient
 from utils import get_hpb_settings
 
@@ -150,7 +151,7 @@ class Application:
 			self.spreed_clients[req.roomToken] = SpreedClient(
 				req.roomToken,
 				self.hpb_settings,
-				req.langId,
+				self.__transcription_language(req.langId),
 				# leave_call_cb=weakcb(),
 				self.__leave_call_cb,
 			)
@@ -239,7 +240,18 @@ class Application:
 				)
 
 			spreed_client = self.spreed_clients[req.roomToken]
-			await spreed_client.set_language(req.langId)
+			await spreed_client.set_language(self.__transcription_language(req.langId))
+
+	@staticmethod
+	def __transcription_language(lang_id: str) -> str:
+		"""The language to transcribe in, which is automatic detection for an id the model has no prompt for."""
+		language = supported_language(lang_id)
+		if language != lang_id:
+			LOGGER.info("Language %r is not supported, detecting the spoken language instead", lang_id, extra={
+				"lang_id": lang_id,
+				"tag": "application",
+			})
+		return language
 
 	async def set_target_language(self, req: TargetLanguageSetRequest) -> None:
 		"""

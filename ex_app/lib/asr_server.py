@@ -8,7 +8,7 @@ Speaks the same websocket protocol the previous Vosk server did, so the wire
 contract with ``transcriber.py`` is unchanged:
 
     C->S  {"config": {"language": "en", "sample_rate": 48000}}
-    S->C  {"success": true}                       (or false for a bad language)
+    S->C  {"success": true}                       ("auto" or an unknown language detects it)
     C->S  <binary s16le mono PCM>
     S->C  exactly one of {"partial": "..."} | {"text": "..."}
     C->S  {"eof": 1}
@@ -47,7 +47,14 @@ import numpy as np
 import sherpa_onnx
 import websockets as ws
 from dotenv import load_dotenv
-from models import LANGUAGE_PROMPTS, MODEL_DIR_NAME, MODEL_FILES_PATTERNS, VAD_MODEL_NAME
+from models import (
+	AUTO_LANGUAGE,
+	LANGUAGE_PROMPTS,
+	MODEL_DIR_NAME,
+	MODEL_FILES_PATTERNS,
+	VAD_MODEL_NAME,
+	supported_language,
+)
 from nc_py_api.ex_app import persistent_storage
 from utils import asr_server_url, internal_asr_disabled
 
@@ -191,9 +198,6 @@ class Decimator:
 		self.__phase = (self.__phase - len(filtered)) % self.__factor
 		self.__tail = buf[len(buf) - (FIR_TAPS - 1):]
 		return np.ascontiguousarray(out, dtype=np.float32)
-
-
-DEFAULT_LANGUAGE = "en"
 
 
 def _env_float(name: str, default: float) -> float:
@@ -501,7 +505,7 @@ class Session:
 		# seconds of audio decoded since the last final of either kind.
 		self.__sent_tokens = 0
 		self.__since_final = 0.0
-		self.__language = DEFAULT_LANGUAGE
+		self.__language = AUTO_LANGUAGE
 		self.__sample_rate = 48000
 
 	@property
@@ -513,10 +517,8 @@ class Session:
 
 	def __create_stream(self) -> sherpa_onnx.OnlineStream:
 		stream = self.__recognizer.create_stream()
-		# The language prompt conditions the model on every chunk. set_option()
-		# accepts any string silently and degrades an unknown value to
-		# auto-detect. Thus set_language() validates the value before it reaches
-		# here.
+		# The language prompt conditions the model on every chunk. set_language()
+		# has already mapped an id without a prompt to AUTO_LANGUAGE.
 		stream.set_option("language", LANGUAGE_PROMPTS[self.__language])
 		return stream
 
@@ -548,10 +550,11 @@ class Session:
 		else:
 			self.__vad.reset()
 
-	async def set_language(self, language: str, sample_rate: float | None) -> bool:
-		if language not in LANGUAGE_PROMPTS:
-			LOGGER.error("Unsupported language: %s", language, extra={"tag": "asr"})
-			return False
+	async def set_language(self, requested: str, sample_rate: float | None) -> None:
+		language = supported_language(requested)
+		if language != requested:
+			LOGGER.info("Unsupported language %r, detecting the spoken language instead",
+						requested, extra={"tag": "asr"})
 
 		if sample_rate:
 			rate = int(sample_rate)
@@ -571,7 +574,6 @@ class Session:
 		LOGGER.info("Language set to %s (prompt %s) at %d Hz",
 					language, LANGUAGE_PROMPTS[language], self.__sample_rate,
 					extra={"tag": "asr"})
-		return True
 
 	def __has_speech(self, pcm: np.ndarray) -> bool:
 		"""Gate on the VAD, which only accepts exact 512-sample windows."""
@@ -718,14 +720,13 @@ async def recognize(
 
 				if "config" in request:
 					config = request.get("config") or {}
-					success = True
 					if "language" in config:
-						success = await session.set_language(
-							config["language"], config.get("sample_rate")
-						)
+						await session.set_language(config["language"], config.get("sample_rate"))
 					elif "sample_rate" in config:
-						success = await session.set_language(session.language, config["sample_rate"])
-					await websocket.send(json.dumps({"success": success}))
+						await session.set_language(session.language, config["sample_rate"])
+					# An unsupported language falls back to automatic detection, thus a
+					# config message always succeeds.
+					await websocket.send(json.dumps({"success": True}))
 					continue
 
 				if request.get("eof") == 1:

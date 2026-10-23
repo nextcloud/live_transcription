@@ -42,20 +42,28 @@ MODEL_FILES_PATTERNS: dict[str, dict[str, str]] = {
 VAD_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 VAD_MODEL_NAME = "silero_vad.onnx"
 
+# The language id that lets the model detect the spoken language by itself. It
+# is the default, and it is what any language without a prompt below falls back
+# to. On the test clips in eight languages it gave the same text as the explicit
+# prompt, and it follows a speaker who changes language mid-stream, which an
+# explicit prompt does not: a wrong prompt produced no text at all for English
+# prompted as Japanese.
+AUTO_LANGUAGE = "auto"
+
 # Language id to the prompt the model is conditioned on for every chunk.
 #
 # One model covers every entry, thus there is no per-language model to download.
-# These are the 32 locales NVIDIA lists as usable out of the box, which are 19
-# transcription-ready locales plus 13 broad-coverage ones. The tokenizer also
-# knows 8 more locales, but they need fine-tuning first, thus they are absent.
+# These are the locales NVIDIA lists as usable out of the box: 19
+# transcription-ready and 13 broad-coverage ones. The model card lists 8 more
+# adaptation-ready locales, which need fine-tuning before they transcribe, thus
+# they are absent and fall back to auto-detection.
 #
 # The values are full locales and not the bare language ids the app uses. The
 # model's own prompt table, which is metadata_props["prompt_dictionary"] inside
-# encoder.onnx, has no bare "ja", "vi" or "zh", and those would fall back to
-# auto-detect. It also maps a bare "es" to es-US while the app means es-ES. An
-# unknown value degrades silently to auto-detect, thus callers are validated
-# against this table before the prompt is applied.
+# encoder.onnx, has no bare "ja", "vi" or "zh". It also maps a bare "es" to
+# es-US while the app means es-ES.
 LANGUAGE_PROMPTS = {
+	AUTO_LANGUAGE: AUTO_LANGUAGE,
 	"ar": "ar-AR",
 	"bg": "bg-BG",
 	"cs": "cs-CZ",
@@ -508,4 +516,11 @@ LANGUAGE_MAP = {
 	"zun": LanguageModel(name="Zuni"),
 }
 
+LANGUAGE_MAP[AUTO_LANGUAGE] = LanguageModel(name="Automatic detection")
+
 SUPPORTED_LANGUAGE_MAP = {lang_id: LANGUAGE_MAP[lang_id] for lang_id in LANGUAGE_PROMPTS}
+
+
+def supported_language(lang_id: str | None) -> str:
+	"""lang_id when the model has a prompt for it, otherwise AUTO_LANGUAGE."""
+	return lang_id if lang_id in LANGUAGE_PROMPTS else AUTO_LANGUAGE

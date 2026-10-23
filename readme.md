@@ -30,6 +30,14 @@ English, Estonian, Finnish, French, German, Hindi, Hungarian, Italian, Japanese,
 Korean, Norwegian, Polish, Portuguese, Romanian, Russian, Slovak, Spanish, Swedish,
 Turkish, Ukrainian, Vietnamese.
 
+The default language is **automatic detection**, which recognises the spoken
+language by itself and follows a speaker who changes language mid-call. It is also
+what a room gets when its language is not in the list above, instead of an error.
+Naming the language is still worth it when you know it: a wrong explicit language
+produces little or no text, but a right one is never worse than detection. A room
+with automatic detection is translated with the translation provider's own
+language detection.
+
 #### Sizing: how one example host performs
 
 The numbers below are measured and not estimated. They are a worked example of what

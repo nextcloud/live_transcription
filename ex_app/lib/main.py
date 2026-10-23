@@ -110,16 +110,21 @@ async def get_enabled():
 @ROUTER_V1.post("/call/set-language",
 	responses={
 		200: {"description": "Language set successfully for the call"},
-		400: {"description": "Invalid or unsupported language ID provided."},
+		400: {"description": "No language ID provided."},
 		404: {"description": "Spreed client not found for the provided room token."},
 		500: {"description": "Failed to set language for the call."}
-	})
+	},
+	description=(
+		"Set the transcription language of a call."
+		' A language ID that is not in /languages falls back to "auto", which detects the spoken language.'
+	),
+)
 async def set_call_language(req: RoomLanguageSetRequest):
 	try:
-		if not req.langId or req.langId not in SUPPORTED_LANGUAGE_MAP:
+		if not req.langId:
 			return JSONResponse(
 				status_code=400,
-				content={"error": "Invalid or unsupported language ID provided."},
+				content={"error": "No language ID provided."},
 			)
 		await SERVICE.set_call_language(req)
 		return JSONResponse(status_code=200, content={"message": "Language set successfully for the call"})
