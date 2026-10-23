@@ -48,6 +48,14 @@ VAD_MODEL_NAME = "silero_vad.onnx"
 # prompt, and it follows a speaker who changes language mid-stream, which an
 # explicit prompt does not: a wrong prompt produced no text at all for English
 # prompted as Japanese.
+#
+# TODO: Talk still treats English as the default. A room with no language set
+# starts its call without a langId, so it gets AUTO_LANGUAGE here, but Talk's
+# set-language call and its call view substitute "en", and its room settings
+# label the empty choice "Default language (English)". Making automatic
+# detection the default everywhere needs those changed in spreed
+# (lib/Service/LiveTranscriptionService.php, src/components/CallView/BottomBar.vue,
+# src/components/ConversationSettings/LiveTranscriptionSettings.vue).
 AUTO_LANGUAGE = "auto"
 
 # Language id to the prompt the model is conditioned on for every chunk.
