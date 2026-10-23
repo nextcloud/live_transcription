@@ -576,7 +576,8 @@ class Session:
 
 	def __ingest(self, pcm: np.ndarray) -> sherpa_onnx.OnlineStream | None:
 		"""Feed a chunk, and return the stream if it now needs decoding."""
-		assert self.__stream is not None
+		if self.__stream is None:
+			return None
 
 		# The endpoint timer runs on DECODED frames, because only decode_stream
 		# advances `num_trailing_blanks` and `num_processed_frames`. Thus an open
