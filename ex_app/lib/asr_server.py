@@ -712,10 +712,6 @@ async def recognize(
 					await websocket.send(await session.flush())
 					break
 
-				if request.get("reset") == 1:
-					await websocket.send(await session.flush())
-					continue
-
 				LOGGER.warning("Unhandled control message: %s", message, extra={"tag": "asr"})
 				continue
 
