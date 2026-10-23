@@ -142,7 +142,7 @@ rate constant. Thus treat approximately 1.2 GB as the steady state, and keep the
 #### Using an external server
 
 Set `LT_DISABLE_INTERNAL_ASR=true` and point `LT_ASR_SERVER_URL` at your own server.
-It must answer **exactly one** JSON message per binary audio frame, because the client
+The server must answer **exactly one** JSON message per binary audio frame, because the client
 blocks on a reply after every frame:
 
 ```
@@ -158,6 +158,10 @@ S->C  {"text": "..."}
 also after 10 s of speech without one, in which case it carries the words decided so
 far and the next partials continue from there.
 `{"partial": ...}` is interim text that follows the last final.
+
+The pre-3.0 names `LT_DISABLE_INTERNAL_VOSK` and `LT_VOSK_SERVER_URL` still work when
+the new ones are unset, with a deprecation warning in the log. They will be removed in
+the next major release.
 
 ### Environment variables
 

@@ -6,7 +6,6 @@
 import asyncio
 import json
 import logging
-import os
 from contextlib import suppress
 from functools import partial
 from time import perf_counter
@@ -18,7 +17,7 @@ from audio_stream import AudioStream
 from constants import ASR_CONNECT_TIMEOUT, MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL
 from livetypes import ASRException, StreamEndedException, Transcript, TranslateInputOutput
 from models import LANGUAGE_MAP
-from utils import get_ssl_context
+from utils import asr_server_url, get_ssl_context
 from websockets import ClientConnection, connect
 
 LOGGER = logging.getLogger("lt.transcriber")
@@ -37,7 +36,7 @@ class Transcriber:
 		self.__asrcon_lock = asyncio.Lock()
 		self.audio_task: asyncio.Task | None = None
 
-		self.__server_url = os.environ.get("LT_ASR_SERVER_URL", "ws://localhost:2702")
+		self.__server_url = asr_server_url()
 
 		self.__session_id = session_id
 		self.__language = language

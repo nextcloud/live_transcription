@@ -21,6 +21,36 @@ from nc_py_api import NextcloudApp
 
 LOGGER = logging.getLogger("lt.utils")
 
+DEFAULT_ASR_SERVER_URL = "ws://localhost:2702"
+
+
+def _env_with_deprecated_name(name: str, deprecated: str) -> str | None:
+	"""Read name, falling back to its pre-3.0 name with a deprecation warning.
+
+	The Vosk-era names are honoured for one major release, because an install
+	that still sets them would otherwise silently switch to the internal server.
+	"""
+	value = os.environ.get(name)
+	if value:
+		return value
+	value = os.environ.get(deprecated)
+	if value:
+		LOGGER.warning(
+			"%s is deprecated and will be removed in the next major release, use %s instead",
+			deprecated, name, extra={"tag": "config"},
+		)
+		return value
+	return None
+
+
+def asr_server_url() -> str:
+	return _env_with_deprecated_name("LT_ASR_SERVER_URL", "LT_VOSK_SERVER_URL") or DEFAULT_ASR_SERVER_URL
+
+
+def internal_asr_disabled() -> bool:
+	value = _env_with_deprecated_name("LT_DISABLE_INTERNAL_ASR", "LT_DISABLE_INTERNAL_VOSK") or "false"
+	return value.lower() in ("true", "1")
+
 
 def hmac_sha256(key, message):
 	return hmac.new(
@@ -83,8 +113,8 @@ def check_hpb_env_vars():
 			"Verify that it is a valid URL with a protocol and hostname."
 		)
 
-	asr_url = os.environ.get("LT_ASR_SERVER_URL")
-	if asr_url:
+	asr_url = asr_server_url()
+	if asr_url != DEFAULT_ASR_SERVER_URL:
 		asr_url_parsed = urlparse(asr_url)
 		asr_host = asr_url_parsed.hostname
 		if not asr_host:

@@ -47,7 +47,7 @@ from meta_translator import MetaTranslator
 from models import LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp
 from transcriber import Transcriber
-from utils import get_ssl_context, hmac_sha256, sanitize_websocket_url
+from utils import asr_server_url, get_ssl_context, hmac_sha256, sanitize_websocket_url
 from websockets import ClientConnection
 from websockets import State as WsState
 from websockets import connect
@@ -1194,7 +1194,7 @@ class SpreedClient:
 					except Exception:
 						LOGGER.exception("Error in connection and start of the ASR server. Cannot continue further.",
 							extra={
-								"server_url": os.getenv("LT_ASR_SERVER_URL", "ws://localhost:2702"),
+								"server_url": asr_server_url(),
 								"session_id": spkr_sid,
 								"room_token": weakself().room_token,
 								"tag": "asr",

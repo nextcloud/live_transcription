@@ -49,6 +49,7 @@ import websockets as ws
 from dotenv import load_dotenv
 from models import LANGUAGE_PROMPTS, MODEL_DIR_NAME, MODEL_FILES_PATTERNS, VAD_MODEL_NAME
 from nc_py_api.ex_app import persistent_storage
+from utils import asr_server_url, internal_asr_disabled
 
 load_dotenv()
 
@@ -192,7 +193,6 @@ class Decimator:
 		return np.ascontiguousarray(out, dtype=np.float32)
 
 
-DEFAULT_SERVER_URL = "ws://localhost:2702"
 DEFAULT_LANGUAGE = "en"
 
 
@@ -752,11 +752,11 @@ async def start():
 		format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 	)
 
-	if os.environ.get("LT_DISABLE_INTERNAL_ASR", "false").lower() in ("true", "1"):
+	if internal_asr_disabled():
 		LOGGER.info("LT_DISABLE_INTERNAL_ASR is set, not starting the internal ASR server")
 		return
 
-	server_url = os.environ.get("LT_ASR_SERVER_URL", DEFAULT_SERVER_URL)
+	server_url = asr_server_url()
 	parsed = urlparse(server_url)
 	interface = parsed.hostname
 	if not interface:

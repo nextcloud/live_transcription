@@ -56,6 +56,16 @@ IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are requi
 				<description>In this case "LT_ASR_SERVER_URL" must point at a working speech recognition server. That server must speak the websocket protocol documented in the readme. Accepted values are "1", "0", "true" and "false".</description>
 			</variable>
 			<variable>
+				<name>LT_VOSK_SERVER_URL</name>
+				<display-name>Deprecated: use LT_ASR_SERVER_URL</display-name>
+				<description>Deprecated name of "LT_ASR_SERVER_URL", read only when that is unset. It will be removed in the next major release.</description>
+			</variable>
+			<variable>
+				<name>LT_DISABLE_INTERNAL_VOSK</name>
+				<display-name>Deprecated: use LT_DISABLE_INTERNAL_ASR</display-name>
+				<description>Deprecated name of "LT_DISABLE_INTERNAL_ASR", read only when that is unset. It will be removed in the next major release.</description>
+			</variable>
+			<variable>
 				<name>SKIP_CERT_VERIFY</name>
 				<display-name>Skip SSL certificate verification (optional)</display-name>
 				<description>When set to "true" or "1", certificate verifications will ke skipped for the websocket connections to the HPB.</description>
