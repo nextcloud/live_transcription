@@ -8,6 +8,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## 3.0.0 - 2026-10-23
+
+### Added
+- replace Vosk with sherpa-onnx and the multilingual nemotron-3.5-asr-streaming-0.6b model, one model for every language, with punctuation and capitalisation @kyteinsky
+- automatic language detection, the new default, also used for any language the model has no prompt for @kyteinsky
+- regional languages en_GB, es_US, fr_CA and pt_BR, and bg, da, et, fi, hr, hu, no, ro, sk and sv @kyteinsky
+- voice activity detection, so silent participants cost almost no CPU @kyteinsky
+- batched decoding of concurrent speakers, one lane per core @kyteinsky
+- final text every 10 s during long speech, so translation does not wait for a pause @kyteinsky
+- CUDA image built on the upstream sherpa-onnx CUDA wheel, and an arm64 CPU image @kyteinsky
+- LT_ASR_THREADS and LT_ASR_DISABLE_VAD settings @kyteinsky
+
+### Changed
+- BREAKING: LT_VOSK_SERVER_URL and LT_DISABLE_INTERNAL_VOSK are renamed to LT_ASR_SERVER_URL and LT_DISABLE_INTERNAL_ASR. The old names still work when the new ones are unset, with a deprecation warning, and will be removed in the next major release @kyteinsky
+- BREAKING: ar_TN, br, ca, eo, fa, kk, te, tg and uz are no longer offered, because the model does not transcribe them. A room set to one of them now uses automatic detection @kyteinsky
+- LT_MAX_WORKERS defaults to the CPU core count, and a higher value logs a warning @kyteinsky
+- the app sends 320 ms of audio per message, the model's chunk size @kyteinsky
+- the healthcheck checks that the ASR server process is alive @kyteinsky
+
+### Fixed
+- replies from the ASR server arrived one audio chunk late, because the config reply was never read @kyteinsky
+- a partial transcript containing the word "success" failed a language switch @kyteinsky
+- wss:// ASR server URLs always failed to connect @kyteinsky
+- the server waited forever for a mistyped LT_ASR_VAD_MODEL path @kyteinsky
+
+
 ## 2.1.3 - 2026-08-19
 
 ### Changed

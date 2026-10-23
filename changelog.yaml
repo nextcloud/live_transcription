@@ -19,6 +19,83 @@ release_agent:
   - author: "^dependabot\\[bot\\]$"
   - message: "^chore\\(changelog\\):"
 entries:
+- version: 3.0.0
+  release_date: '2026-10-23'
+  sections:
+  - name: Added
+    items:
+    - text: replace Vosk with sherpa-onnx and the multilingual nemotron-3.5-asr-streaming-0.6b model, one model for every language, with punctuation and capitalisation
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: automatic language detection, the new default, also used for any language the model has no prompt for
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: regional languages en_GB, es_US, fr_CA and pt_BR, and bg, da, et, fi, hr, hu, no, ro, sk and sv
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: voice activity detection, so silent participants cost almost no CPU
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: batched decoding of concurrent speakers, one lane per core
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: final text every 10 s during long speech, so translation does not wait for a pause
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: CUDA image built on the upstream sherpa-onnx CUDA wheel, and an arm64 CPU image
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: LT_ASR_THREADS and LT_ASR_DISABLE_VAD settings
+      authors:
+      - kyteinsky
+      issue_number:
+  - name: Changed
+    items:
+    - text: 'BREAKING: LT_VOSK_SERVER_URL and LT_DISABLE_INTERNAL_VOSK are renamed to LT_ASR_SERVER_URL and LT_DISABLE_INTERNAL_ASR. The old names still work when the new ones are unset, with a deprecation warning, and will be removed in the next major release'
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: 'BREAKING: ar_TN, br, ca, eo, fa, kk, te, tg and uz are no longer offered, because the model does not transcribe them. A room set to one of them now uses automatic detection'
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: LT_MAX_WORKERS defaults to the CPU core count, and a higher value logs a warning
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: the app sends 320 ms of audio per message, the model's chunk size
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: the healthcheck checks that the ASR server process is alive
+      authors:
+      - kyteinsky
+      issue_number:
+  - name: Fixed
+    items:
+    - text: replies from the ASR server arrived one audio chunk late, because the config reply was never read
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: a partial transcript containing the word "success" failed a language switch
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: wss:// ASR server URLs always failed to connect
+      authors:
+      - kyteinsky
+      issue_number:
+    - text: the server waited forever for a mistyped LT_ASR_VAD_MODEL path
+      authors:
+      - kyteinsky
+      issue_number:
 - version: 2.1.3
   release_date: '2026-08-19'
   sections:
