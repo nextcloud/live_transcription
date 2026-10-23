@@ -50,7 +50,7 @@ class Transcriber:
 		async with self.__asrcon_lock:
 			self.__asrcon: ClientConnection | None = await connect(  # type: ignore[annotation-unchecked]
 				self.__server_url,
-				*({
+				**({
 					"server_hostname": urlparse(self.__server_url).hostname,
 					"ssl": ssl_ctx,
 				} if ssl_ctx else {}),
