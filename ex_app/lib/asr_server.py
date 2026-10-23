@@ -153,7 +153,7 @@ def default_max_workers() -> int:
 # A chunk is therefore downsampled twice, once here for the VAD and again inside
 # sherpa-onnx for the recognizer. Feeding this decimated copy to both would avoid
 # that, but it is the worse trade:
-# worse. Measured over 90 s of speech it saves 0.14 s of CPU, which is 0.15 % of
+# measured over 90 s of speech it saves 0.14 s of CPU, which is 0.15 % of
 # realtime against approximately 100 s spent decoding, and it costs 0.40 points of
 # WER. The cause is that Kaldi's LinearResample has a longer filter than the short
 # one below. Cheap and approximate is right for a speech or silence decision and
