@@ -117,7 +117,7 @@ class OCPTranslator(ATranslator):
 							"input": message,
 							"origin_language": (
 								AUTO_DETECT_ORIGIN_LANG_ID if self.origin_language == AUTO_LANGUAGE
-								else OCP_ORIGIN_LANG_ID or self.origin_language
+								else OCP_ORIGIN_LANG_ID or await OCPTranslator.provider_origin(self.origin_language)
 							),
 							"target_language": self.target_language,
 						},
@@ -295,17 +295,32 @@ class OCPTranslator(ATranslator):
 
 	@staticmethod
 	@timed_cache_async()
+	async def provider_origin(origin_language: str) -> str:
+		"""The provider's id for a room language, which may be regional, as in pt_BR.
+
+		The regional id is used when the provider lists it, and its bare language
+		otherwise, which is the same fallback Talk applies to target languages.
+		"""
+		task_types = await OCPTranslator.__get_task_types()
+		origins = {o.value for o in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]}
+		if origin_language in origins:
+			return origin_language
+		return origin_language.split("_", 1)[0]
+
+	@staticmethod
+	@timed_cache_async()
 	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
 		"""Also sets self.__ocp_origin_lang_id to AUTO_DETECT_ORIGIN_LANG_ID if the origin language is not supported but auto-detect is."""  # noqa: E501
 
 		global OCP_ORIGIN_LANG_ID
 
 		task_types = await OCPTranslator.__get_task_types()
+		provider_origin = await OCPTranslator.provider_origin(origin_language)
 
 		# A room transcribed with automatic detection has no origin language to
 		# name, thus it can only be translated with automatic detection too.
 		if origin_language == AUTO_LANGUAGE or not any(
-			olang.value == origin_language
+			olang.value == provider_origin
 			for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]
 		):
 			if not any(

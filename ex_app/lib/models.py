@@ -62,6 +62,10 @@ AUTO_LANGUAGE = "auto"
 # model's own prompt table, which is metadata_props["prompt_dictionary"] inside
 # encoder.onnx, has no bare "ja", "vi" or "zh". It also maps a bare "es" to
 # es-US while the app means es-ES.
+#
+# The four languages the model knows in two regions get a second, regional id
+# in Nextcloud's own ll_CC form, which Talk stores and shows as it is. The bare
+# id keeps meaning the region it meant before.
 LANGUAGE_PROMPTS = {
 	AUTO_LANGUAGE: AUTO_LANGUAGE,
 	"ar": "ar-AR",
@@ -70,10 +74,13 @@ LANGUAGE_PROMPTS = {
 	"da": "da-DK",
 	"de": "de-DE",
 	"en": "en-US",
+	"en_GB": "en-GB",
 	"es": "es-ES",
+	"es_US": "es-US",
 	"et": "et-EE",
 	"fi": "fi-FI",
 	"fr": "fr-FR",
+	"fr_CA": "fr-CA",
 	"hi": "hi-IN",
 	"hr": "hr-HR",
 	"hu": "hu-HU",
@@ -86,6 +93,7 @@ LANGUAGE_PROMPTS = {
 	"no": "nb-NO",
 	"pl": "pl-PL",
 	"pt": "pt-PT",
+	"pt_BR": "pt-BR",
 	"ro": "ro-RO",
 	"ru": "ru-RU",
 	"sk": "sk-SK",
@@ -198,9 +206,11 @@ LANGUAGE_MAP = {
 	"el": LanguageModel(name="Greek"),
 	"emp": LanguageModel(name="N. Emberá"),
 	"en": LanguageModel(name="English"),
+	"en_GB": LanguageModel(name="English (United Kingdom)"),
 	"enq": LanguageModel(name="Enga"),
 	"eo": LanguageModel(name="Esperanto"),
 	"es": LanguageModel(name="Español"),
+	"es_US": LanguageModel(name="Español (Estados Unidos)"),
 	"et": LanguageModel(name="Estonian"),
 	"eu": LanguageModel(name="Basque"),
 	"fa": LanguageModel(name="فارسی", metadata=LanguageMetadata(rtl=True)),
@@ -213,6 +223,7 @@ LANGUAGE_MAP = {
 	"fo": LanguageModel(name="Faroese"),
 	"fon": LanguageModel(name="Fon"),
 	"fr": LanguageModel(name="Français"),
+	"fr_CA": LanguageModel(name="Français (Canada)"),
 	"frp": LanguageModel(name="Arpitan"),
 	"fy": LanguageModel(name="W. Frisian"),
 	"ga": LanguageModel(name="Irish"),
@@ -398,6 +409,7 @@ LANGUAGE_MAP = {
 	"prk": LanguageModel(name="Parauk"),
 	"ps": LanguageModel(name="Pashto"),
 	"pt": LanguageModel(name="Português"),
+	"pt_BR": LanguageModel(name="Português (Brasil)"),
 	"qu": LanguageModel(name="Quechua"),
 	"qub": LanguageModel(name="Huallaga Huánuco Quechua"),
 	"qug": LanguageModel(name="Chimborazo Highland Quichua"),

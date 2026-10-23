@@ -18,7 +18,8 @@ The installation steps can be found here: https://docs.nextcloud.com/server/late
 Transcription runs on [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) with
 NVIDIA's [nemotron-3.5-asr-streaming-0.6b](https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b),
 a cache-aware FastConformer transducer that emits text while the speaker is still
-talking. One 651 MB model covers all 28 supported languages and writes punctuation
+talking. One 651 MB model covers all 28 supported languages, four of them in two
+regions, and writes punctuation
 and capital letters. The app downloads it on first start into its persistent storage,
 together with a 628 kB [silero VAD](https://github.com/snakers4/silero-vad).
 
@@ -29,6 +30,11 @@ The supported languages are Arabic, Bulgarian, Chinese, Croatian, Czech, Danish,
 English, Estonian, Finnish, French, German, Hindi, Hungarian, Italian, Japanese,
 Korean, Norwegian, Polish, Portuguese, Romanian, Russian, Slovak, Spanish, Swedish,
 Turkish, Ukrainian, Vietnamese.
+English, French, Portuguese and Spanish also come in a second region: `en_GB`, `fr_CA`,
+`pt_BR` and `es_US`. The bare ids keep their previous meaning, which is US English,
+France French, European Portuguese and Spain Spanish. Translation sends a regional id
+to the translation provider as it is when the provider lists it, and as its bare
+language otherwise.
 
 The default language is **automatic detection**, which recognises the spoken
 language by itself and follows a speaker who changes language mid-call. It is also
