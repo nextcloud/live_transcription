@@ -258,6 +258,36 @@ async def wait_for_model(model_dir: str):
 		await asyncio.sleep(2)
 
 
+# How often the wait for the VAD model repeats its log line. The healthcheck only
+# checks that this process is alive, thus the log is where a stalled download
+# shows.
+VAD_WAIT_LOG_INTERVAL = 60.0
+
+
+async def wait_for_vad(vad_model: str, explicit: bool):
+	"""Block until the VAD model exists.
+
+	Only the default path is downloaded by /init, thus only that path is worth
+	waiting for. A path set with LT_ASR_VAD_MODEL is the operator's, and a
+	missing file there is a typo that no amount of waiting fixes.
+
+	Raises
+	------
+		FileNotFoundError: when an explicit path does not exist
+	"""  # noqa
+	if os.path.exists(vad_model):
+		return
+	if explicit:
+		raise FileNotFoundError(f"LT_ASR_VAD_MODEL points at {vad_model}, which does not exist")
+	loop = asyncio.get_running_loop()
+	next_log = loop.time()
+	while not os.path.exists(vad_model):
+		if loop.time() >= next_log:
+			LOGGER.info("Waiting for the VAD model to be downloaded to %s", vad_model, extra={"tag": "asr"})
+			next_log = loop.time() + VAD_WAIT_LOG_INTERVAL
+		await asyncio.sleep(2)
+
+
 def build_recognizer(model_dir: str) -> sherpa_onnx.OnlineRecognizer:
 	"""Build the shared recognizer.
 
@@ -310,13 +340,11 @@ def build_recognizer(model_dir: str) -> sherpa_onnx.OnlineRecognizer:
 
 
 def build_vad(vad_model: str) -> sherpa_onnx.VoiceActivityDetector | None:
+	"""Build one speaker's VAD. start() has already waited for the model file."""
 	if os.environ.get("LT_ASR_DISABLE_VAD", "false").lower() in ("1", "true"):
 		LOGGER.warning(
 			"VAD disabled: every silent participant will cost nearly as much CPU as a speaking one"
 		)
-		return None
-	if not os.path.exists(vad_model):
-		LOGGER.warning("VAD model not found at %s, continuing without it", vad_model)
 		return None
 
 	config = sherpa_onnx.VadModelConfig()
@@ -745,16 +773,14 @@ async def start():
 	port = parsed.port or 2702
 
 	model_dir = os.environ.get("LT_ASR_MODEL_DIR") or os.path.join(persistent_storage(), MODEL_DIR_NAME)
-	vad_model = os.environ.get("LT_ASR_VAD_MODEL") or os.path.join(persistent_storage(), VAD_MODEL_NAME)
+	vad_override = os.environ.get("LT_ASR_VAD_MODEL")
+	vad_model = vad_override or os.path.join(persistent_storage(), VAD_MODEL_NAME)
 
 	# The app's /init handler fetches both, and it runs after this process starts.
 	# Thus waiting here keeps the VAD from being skipped on a cold deploy.
 	await wait_for_model(model_dir)
 	if os.environ.get("LT_ASR_DISABLE_VAD", "false").lower() not in ("1", "true"):
-		if not os.path.exists(vad_model):
-			LOGGER.info("Waiting for the VAD model at %s", vad_model, extra={"tag": "asr"})
-		while not os.path.exists(vad_model):
-			await asyncio.sleep(2)
+		await wait_for_vad(vad_model, explicit=bool(vad_override))
 	recognizer = build_recognizer(model_dir)
 	LOGGER.info("Loaded the ASR model from %s", model_dir, extra={"tag": "asr"})
 
