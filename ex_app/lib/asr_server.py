@@ -4,11 +4,11 @@
 #
 """Streaming ASR websocket server backed by sherpa-onnx.
 
-Speaks the same websocket protocol the previous Vosk server did, so the wire
-contract with ``transcriber.py`` is unchanged:
+Speaks the same websocket protocol the previous Vosk server did, so the communication
+with ``transcriber.py`` is unchanged:
 
     C->S  {"config": {"language": "en", "sample_rate": 48000}}
-    S->C  {"success": true}                       ("auto" or an unknown language detects it)
+    S->C  {"success": true}                       ("detect_language", for an unknown language too)
     C->S  <binary s16le mono PCM>
     S->C  exactly one of {"partial": "..."} | {"text": "..."}
     C->S  {"eof": 1}
@@ -48,7 +48,7 @@ import sherpa_onnx
 import websockets as ws
 from dotenv import load_dotenv
 from models import (
-	AUTO_LANGUAGE,
+	DETECT_LANGUAGE,
 	LANGUAGE_PROMPTS,
 	MODEL_DIR_NAME,
 	MODEL_FILES_PATTERNS,
@@ -505,7 +505,7 @@ class Session:
 		# seconds of audio decoded since the last final of either kind.
 		self.__sent_tokens = 0
 		self.__since_final = 0.0
-		self.__language = AUTO_LANGUAGE
+		self.__language = DETECT_LANGUAGE
 		self.__sample_rate = 48000
 
 	@property
@@ -518,7 +518,7 @@ class Session:
 	def __create_stream(self) -> sherpa_onnx.OnlineStream:
 		stream = self.__recognizer.create_stream()
 		# The language prompt conditions the model on every chunk. set_language()
-		# has already mapped an id without a prompt to AUTO_LANGUAGE.
+		# has already mapped an id without a prompt to DETECT_LANGUAGE.
 		stream.set_option("language", LANGUAGE_PROMPTS[self.__language])
 		return stream
 

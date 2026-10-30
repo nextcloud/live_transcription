@@ -116,7 +116,7 @@ async def get_enabled():
 	},
 	description=(
 		"Set the transcription language of a call."
-		' A language ID that is not in /languages falls back to "auto", which detects the spoken language.'
+		' A language ID that is not in /languages falls back to "detect_language", which detects the spoken language.'
 	),
 )
 async def set_call_language(req: RoomLanguageSetRequest):

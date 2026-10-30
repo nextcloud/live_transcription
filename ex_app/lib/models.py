@@ -50,13 +50,13 @@ VAD_MODEL_NAME = "silero_vad.onnx"
 # prompted as Japanese.
 #
 # TODO: Talk still treats English as the default. A room with no language set
-# starts its call without a langId, so it gets AUTO_LANGUAGE here, but Talk's
+# starts its call without a langId, so it gets DETECT_LANGUAGE here, but Talk's
 # set-language call and its call view substitute "en", and its room settings
 # label the empty choice "Default language (English)". Making automatic
 # detection the default everywhere needs those changed in spreed
 # (lib/Service/LiveTranscriptionService.php, src/components/CallView/BottomBar.vue,
 # src/components/ConversationSettings/LiveTranscriptionSettings.vue).
-AUTO_LANGUAGE = "auto"
+DETECT_LANGUAGE = "detect_language"
 
 # Language id to the prompt the model is conditioned on for every chunk.
 #
@@ -75,7 +75,7 @@ AUTO_LANGUAGE = "auto"
 # in Nextcloud's own ll_CC form, which Talk stores and shows as it is. The bare
 # id keeps meaning the region it meant before.
 LANGUAGE_PROMPTS = {
-	AUTO_LANGUAGE: AUTO_LANGUAGE,
+	DETECT_LANGUAGE: DETECT_LANGUAGE,
 	"ar": "ar-AR",
 	"bg": "bg-BG",
 	"cs": "cs-CZ",
@@ -536,11 +536,11 @@ LANGUAGE_MAP = {
 	"zun": LanguageModel(name="Zuni"),
 }
 
-LANGUAGE_MAP[AUTO_LANGUAGE] = LanguageModel(name="Automatic detection")
+LANGUAGE_MAP[DETECT_LANGUAGE] = LanguageModel(name="Automatic detection")
 
 SUPPORTED_LANGUAGE_MAP = {lang_id: LANGUAGE_MAP[lang_id] for lang_id in LANGUAGE_PROMPTS}
 
 
 def supported_language(lang_id: str | None) -> str:
-	"""lang_id when the model has a prompt for it, otherwise AUTO_LANGUAGE."""
-	return lang_id if lang_id in LANGUAGE_PROMPTS else AUTO_LANGUAGE
+	"""lang_id when the model has a prompt for it, otherwise DETECT_LANGUAGE."""
+	return lang_id if lang_id in LANGUAGE_PROMPTS else DETECT_LANGUAGE

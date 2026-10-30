@@ -13,7 +13,7 @@ import niquests
 from atranslator import ATranslator
 from constants import OCP_TASK_PROC_SCHED_RETRIES
 from livetypes import LanguageModel, SupportedTranslationLanguages, TranslateException, TranslateFatalException
-from models import AUTO_LANGUAGE, LANGUAGE_MAP
+from models import DETECT_LANGUAGE, LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp, NextcloudException
 from pydantic import BaseModel, ValidationError
 from utils import timed_cache_async
@@ -116,7 +116,7 @@ class OCPTranslator(ATranslator):
 						"input": {
 							"input": message,
 							"origin_language": (
-								AUTO_DETECT_ORIGIN_LANG_ID if self.origin_language == AUTO_LANGUAGE
+								AUTO_DETECT_ORIGIN_LANG_ID if self.origin_language == DETECT_LANGUAGE
 								else OCP_ORIGIN_LANG_ID or await OCPTranslator.provider_origin(self.origin_language)
 							),
 							"target_language": self.target_language,
@@ -319,7 +319,7 @@ class OCPTranslator(ATranslator):
 
 		# A room transcribed with automatic detection has no origin language to
 		# name, thus it can only be translated with automatic detection too.
-		if origin_language == AUTO_LANGUAGE or not any(
+		if origin_language == DETECT_LANGUAGE or not any(
 			olang.value == provider_origin
 			for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]
 		):

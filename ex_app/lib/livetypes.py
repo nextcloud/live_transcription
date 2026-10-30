@@ -28,7 +28,7 @@ class TranscribeRequest(BaseModel):
 	ncSessionId: str # Nextcloud session ID, not the HPB session ID
 	enable: bool = True
 	# the room language; an id the model has no prompt for means automatic detection
-	langId: str = "auto"
+	langId: str = "detect_language"
 	# the user's language, when set, translate the transcript to this language
 	translationTargetLangId: str | None = None
 
