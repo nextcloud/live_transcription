@@ -75,16 +75,21 @@ PRE_SPEECH_CHUNKS = 4
 # Send a final for the settled part of an utterance after this much audio
 # without a final. Translation uses only finals, and the endpoint rules wait for
 # a pause, so a speaker who does not pause is otherwise not translated until
-# MAX_UTTERANCE_SECONDS.
+# MAX_UTTERANCE_SECONDS, if ever.
 #
 # This does not reset the stream, so no word is cut. A lower
 # MAX_UTTERANCE_SECONDS resets the decoder at any point: at 10 s it cut
 # "country" to "coun" in an 11 s clip.
 EARLY_FINAL_SECONDS = 10.0
 
-# todo: unused
-# Hard limit on a continuous utterance.
-MAX_UTTERANCE_SECONDS = 60.0
+# The hard limit on an utterance, or -1 for none. Reaching it resets the decoder
+# and the encoder caches wherever it lands, so the words around the cut lose their
+# context: on 90 s of speech the sherpa-onnx default of 20 s cut "humanity" to
+# "hu". Early finals already deliver text during long speech, thus this only
+# guards a monologue. Not resetting is cheap: one stream decoded for 10 minutes
+# without a reset held memory at 1030 MiB and decode time at 86 ms per chunk,
+# and only re-reading the text grew, from 0.1 ms to 0.4 ms per chunk.
+MAX_UTTERANCE_SECONDS = 600.0
 
 # Tokens that end a sentence: includes the CJK (Chinese, Japanese, Korean) full stop,
 # fullwidth ? and !, the Devanagari danda and the Arabic question mark.
@@ -307,6 +312,9 @@ def build_recognizer(model_dir: str) -> sherpa_onnx.OnlineRecognizer:
 		# lost nothing.
 		rule1_min_trailing_silence=_env_float("LT_ASR_RULE1_SILENCE", 3.0),
 		rule2_min_trailing_silence=_env_float("LT_ASR_RULE2_SILENCE", 2.0),
+		# sherpa-onnx fires rule 3 once the utterance length reaches this, and has
+		# no switch to turn the rule off, thus infinity is how -1 disables it.
+		rule3_min_utterance_length=MAX_UTTERANCE_SECONDS if MAX_UTTERANCE_SECONDS != -1 else math.inf,
 		**paths,  # type: ignore[arg-type]
 	)
 
