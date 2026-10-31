@@ -1097,6 +1097,19 @@ class SpreedClient:
 	async def handle_offer(self, message):  # noqa: C901
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
+		async with self.peer_connection_lock:
+			self._offer_requested.pop(spkr_sid, None)
+			if (
+				spkr_sid in self.peer_connections
+				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
+				and self.peer_connections[spkr_sid].pc.connectionState != "failed"
+			):
+				LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
+					"session_id": spkr_sid,
+					"room_token": self.room_token,
+					"tag": "participants",
+				})
+				return
 
 		try:
 			media_desc = SessionDescription.parse(
@@ -1126,20 +1139,6 @@ class SpreedClient:
 				"tag": "offer",
 			})
 			return
-
-		async with self.peer_connection_lock:
-			self._offer_requested.pop(spkr_sid, None)
-			if (
-				spkr_sid in self.peer_connections
-				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
-				and self.peer_connections[spkr_sid].pc.connectionState != "failed"
-			):
-				LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
-					"session_id": spkr_sid,
-					"room_token": self.room_token,
-					"tag": "participants",
-				})
-				return
 
 		ice_servers = []
 		for stunserver in self.hpb_settings.stunservers:
@@ -1190,7 +1189,7 @@ class SpreedClient:
 						del weakself().peer_connections[spkr_sid]
 					weakself()._offer_requested.pop(spkr_sid, None)
 
-		# explicity decline video track so aiortc does not try downloading and decoding it
+		# explicitly decline video track so aiortc does not try downloading and decoding it
 		for media in offer_media_kinds:
 			if media == "audio":
 				pc.addTransceiver("audio", direction="recvonly")
