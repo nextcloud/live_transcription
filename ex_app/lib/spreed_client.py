@@ -952,15 +952,15 @@ class SpreedClient:
 
 					# user connected, keep a map of Nextcloud session IDs to HPB session IDs
 					async with self.target_lock:
-						# not sure why a KeyError is hit when the monitor task is cancelled,
-						# adding a guard to prevent error logs
+						# only in-call changes carry the Nextcloud session ID, the update sent when
+						# a participant is modified (name, type, permissions) does not
 						if "nextcloudSessionId" in user_desc:
 							# todo: get the userid for the session ids and maintain a map in "sid_translation_lang_map"
 							# todo: use the ownerId of the room for the OCP translations, using talk api, or something.
 							self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
 
 					# if this is one of the deferred targets, add it to the targets
-					if (user_desc["nextcloudSessionId"] in self._nc_sid_wait_stash):
+					if (user_desc.get("nextcloudSessionId") in self._nc_sid_wait_stash):
 						LOGGER.debug("Adding one of the deferred targets to the target dict", extra={
 							"nc_session_id": user_desc["nextcloudSessionId"],
 							"session_id": user_desc["sessionId"],
