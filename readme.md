@@ -141,6 +141,18 @@ participants would exceed realtime even with one person talking. The VAD is what
 makes listeners cost approximately 1 MiB and almost no CPU. Disable it with
 `LT_ASR_DISABLE_VAD` only when debugging.
 
+The detector is silero v6.2.3, the 16 kHz export, and two of its settings are exposed:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LT_ASR_VAD_THRESHOLD` | 0.5 | Speech probability above which a 32 ms window counts as speech. Raise it in a noisy room, at the cost of clipping quiet speakers. |
+| `LT_ASR_VAD_MIN_SILENCE` | 0.25 s | How long the gate stays open after the last speech. This is shorter than silero's own 0.5 s, because the gate only decides whether a chunk is worth decoding, while the endpoint rules decide where an utterance ends. |
+
+The gate decides *whether to spend CPU*, not where utterances begin or end. It never
+drops the onset of a word: the four chunks before speech is detected are replayed into
+the recognizer, so the model still hears the attack of the first syllable. That matters
+because silero is causal and needs roughly one and a half windows of speech before it
+triggers, so the chunk that first tests positive already starts mid-word.
 
 **Stability**
 
@@ -181,7 +193,9 @@ the next major release.
 ### Environment variables
 
 `example.env` contains all the environment variables needed to run the app. You can copy it to `.env` and change the values as needed.
-The description of each variable other than AppAPI variables is in the `appinfo/info.xml` file.
+The description of each deploy-time variable other than AppAPI variables is in the `appinfo/info.xml` file.
+The VAD tuning variables are described in the voice activity detection section above,
+and `COMPUTE_DEVICE` in the image variants section below.
 
 ### Image variants
 
@@ -190,8 +204,8 @@ The Dockerfile is multi-stage and builds two runtime images, selected with
 
 | Target | Base | Use it for |
 |---|---|---|
-| `runtime-cpu` (default) | `debian:13-slim` | every CPU deployment, amd64 and arm64 |
-| `runtime-cuda` | `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` | NVIDIA GPUs, amd64 only |
+| `runtime-cpu` (default) | `debian:13-slim` | every CPU deployment; published for amd64, and also builds for arm64 |
+| `runtime-cuda` | `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04` | NVIDIA GPUs, amd64 only |
 
 ```bash
 docker build -t live_transcription .                        # CPU

@@ -4,11 +4,13 @@
 #
 """Streaming ASR websocket server that uses sherpa-onnx.
 
-It uses the same websocket protocol as the previous Vosk server, so
-``transcriber.py`` did not change:
+The websocket protocol it speaks with ``transcriber.py``. A config message is
+always acknowledged with success, because a language the model has no prompt
+for falls back to automatic detection, and ``eof`` is the only other control
+message:
 
     C->S  {"config": {"language": "en", "sample_rate": 48000}}
-    S->C  {"success": true}                       ("detect_language", for an unknown language too)
+    S->C  {"success": true}
     C->S  <binary s16le mono PCM>
     S->C  exactly one of {"partial": "..."} | {"text": "..."}
     C->S  {"eof": 1}
@@ -22,9 +24,9 @@ its own copy of the weights (approximately 730 MiB), while the ``OnlineStream``
 of each speaker costs approximately 1 MiB. Decoding runs on ``Lanes``, a set of
 decode threads which releases the GIL and does not block the event loop.
 
-A silero VAD pre-filters each stream, because the encoder uses 85 % to 95 % of
-the CPU time of speech also for silence. Without the VAD, a four-person call is
-slower than realtime on a 4-core host, for instance.
+A silero VAD gates each stream. Without it, a silent participant costs 85 % to
+97 % of the CPU time of a speaking one, because the encoder runs regardless of
+content. A four-person call is then slower than realtime on a 4-core host.
 """
 
 import asyncio
@@ -171,7 +173,7 @@ class Decimator:
 	"""Integer-factor downsampler that keeps the filter and phase state between chunks.
 
 	A new filter for each chunk causes a discontinuity at each chunk boundary,
-	which occurs 2.5 times a second.
+	which occurs about three times a second.
 	"""
 
 	def __init__(self, factor: int):
@@ -301,7 +303,11 @@ def build_recognizer(model_dir: str) -> sherpa_onnx.OnlineRecognizer:
 		# chunk is too small to divide across cores, and the onnxruntime
 		# threads spin between operators, which uses CPU for no work. With 4
 		# speakers on a 4-core host, 1 thread against 4 used 12.8 against 28.1
-		# CPU seconds, with p95 latency 210 ms against 384 ms.
+		# CPU seconds, with p95 latency 210 ms against 384 ms. The default scales
+		# with the core count, so a 16-thread host was worse again at 81.0 CPU
+		# seconds and p95 1315 ms, where 103 of 112 chunks missed their 400 ms
+		# budget and the stream never caught up. Those runs used 400 ms chunks;
+		# the client now sends 320 ms ones.
 		num_threads=_env_int("LT_ASR_THREADS", 1),
 		provider=provider,
 		decoding_method="greedy_search",
@@ -351,10 +357,11 @@ class Lanes:
 
 	Each lane takes the waiting jobs from the shared queue and decodes their
 	streams in one decode_streams() call. A batch shares one encoder run, which
-	costs less than separate decodes. With 16 speakers on a 4-core host for
-	20 s, a pool of 8 threads used 100.8 CPU seconds and fell 7.4 s behind, and
-	4 lanes used 76.2 and stayed within 0.7 s. Batches form only when more
-	streams wait than there are lanes.
+	costs less than separate decodes. With 16 speakers sending 400 ms chunks in
+	real time on a 4-core host for 20 s, a pool of 8 threads used 100.8 CPU
+	seconds and fell 7.4 s behind, and 4 lanes used 76.2 and stayed within
+	0.7 s. With the 320 ms chunks the client now sends, 4 lanes stayed within
+	0.26 s. Batches form only when more streams wait than there are lanes.
 
 	A stream decoded in a batch can give a different result than alone, because
 	the int8 encoder uses one quantisation scale for each batch. The WER changed

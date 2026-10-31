@@ -36,7 +36,7 @@ entries:
       authors:
       - kyteinsky
       issue_number:
-    - text: voice activity detection, so silent participants cost almost no CPU
+    - text: voice activity detection with silero v6.2.3, so silent participants cost almost no CPU
       authors:
       - kyteinsky
       issue_number:
@@ -48,7 +48,7 @@ entries:
       authors:
       - kyteinsky
       issue_number:
-    - text: CUDA image built on the upstream sherpa-onnx CUDA wheel, and an arm64 CPU image
+    - text: CUDA image built on the upstream sherpa-onnx CUDA wheel
       authors:
       - kyteinsky
       issue_number:
@@ -77,6 +77,10 @@ entries:
     - text: the healthcheck checks that the ASR server process is alive
       authors:
       - kyteinsky
+      issue_number:
+    - text: an utterance is cut without a pause only after 600 s instead of 20 s, because the cut loses the context of the words around it; early finals already deliver text during long speech
+      authors:
+      - meatybot
       issue_number:
   - name: Fixed
     items:
