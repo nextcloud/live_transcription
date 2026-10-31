@@ -68,7 +68,7 @@ IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are requi
 			<variable>
 				<name>SKIP_CERT_VERIFY</name>
 				<display-name>Skip SSL certificate verification (optional)</display-name>
-				<description>When set to "true" or "1", certificate verifications will ke skipped for the websocket connections to the HPB.</description>
+				<description>When set to "true" or "1", certificate verification is skipped for all outgoing connections: the websockets to the HPB and to the speech recognition server, and the API calls to Nextcloud.</description>
 			</variable>
 			<variable>
 				<name>LT_MAX_WORKERS</name>

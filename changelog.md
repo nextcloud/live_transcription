@@ -14,10 +14,10 @@ and this project adheres to [Semantic Versioning](http://semver.org/).
 - replace Vosk with sherpa-onnx and the multilingual nemotron-3.5-asr-streaming-0.6b model, one model for every language, with punctuation and capitalisation @kyteinsky
 - automatic language detection, the new default, also used for any language the model has no prompt for @kyteinsky
 - regional languages en_GB, es_US, fr_CA and pt_BR, and bg, da, et, fi, hr, hu, no, ro, sk and sv @kyteinsky
-- voice activity detection, so silent participants cost almost no CPU @kyteinsky
+- voice activity detection with silero v6.2.3, so silent participants cost almost no CPU @kyteinsky
 - batched decoding of concurrent speakers, one lane per core @kyteinsky
 - final text every 10 s during long speech, so translation does not wait for a pause @kyteinsky
-- CUDA image built on the upstream sherpa-onnx CUDA wheel, and an arm64 CPU image @kyteinsky
+- CUDA image built on the upstream sherpa-onnx CUDA wheel @kyteinsky
 - LT_ASR_THREADS and LT_ASR_DISABLE_VAD settings @kyteinsky
 
 ### Changed
