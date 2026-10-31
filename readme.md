@@ -21,7 +21,7 @@ a cache-aware FastConformer transducer that emits text while the speaker is stil
 talking. One 651 MB model covers all 28 supported languages, four of them in two
 regions, and writes punctuation
 and capital letters. The app downloads it on first start into its persistent storage,
-together with a 628 kB [silero VAD](https://github.com/snakers4/silero-vad).
+together with a 1.3 MB [silero VAD](https://github.com/snakers4/silero-vad) v6.
 
 The model weights are licensed under [OpenMDW-1.1](https://openmdw.ai/license/1-1/),
 which places no restrictions on the transcripts the model produces.
@@ -140,6 +140,7 @@ spends 85 % to 97 % as much CPU on a silent stream as on a speaking one, and fou
 participants would exceed realtime even with one person talking. The VAD is what
 makes listeners cost approximately 1 MiB and almost no CPU. Disable it with
 `LT_ASR_DISABLE_VAD` only when debugging.
+
 
 **Stability**
 

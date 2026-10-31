@@ -64,7 +64,7 @@ LOGGER = logging.getLogger("lt.asr_server")
 # change in a stream, because sherpa-onnx then calls exit(-1).
 ENGINE_RATE = 16000
 
-# silero v5 frame size at 16 kHz
+# silero v6 frame size at 16 kHz
 VAD_WINDOW = 512
 
 # Number of audio chunks to prepend for sherpa from the silent zone when VAD
@@ -336,7 +336,8 @@ def build_vad(vad_model: str) -> sherpa_onnx.VoiceActivityDetector | None:
 	config.silero_vad.threshold = _env_float("LT_ASR_VAD_THRESHOLD", 0.5)
 	# min_speech_duration and max_speech_duration stay at silero's defaults
 	# (0.25 s and 20 s), because they only limit the queued speech segments,
-	# which this server does not read. window_size must stay 512 for silero v5.
+	# which this server does not read. window_size must stay 512: sherpa-onnx
+	# exits for any other size with a silero v5 or later model, which this is.
 	config.sample_rate = ENGINE_RATE
 	config.provider = "cpu"
 	config.num_threads = 1
@@ -453,7 +454,7 @@ class Session:
 		self.__vad_model = vad_model
 		self.__stream: sherpa_onnx.OnlineStream | None = None
 		# The VAD keeps speech and silence state, so each speaker needs one. The
-		# model is 628 kB and onnxruntime mmaps it.
+		# model is 1.3 MB and onnxruntime mmaps it.
 		self.__vad: sherpa_onnx.VoiceActivityDetector | None = None
 		self.__vad_tail = np.empty(0, dtype=np.float32)
 		self.__vad_decimator: Decimator | None = None
