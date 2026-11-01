@@ -173,7 +173,7 @@ class OCPTranslator(ATranslator):
 
 			i = 0
 			wait_time = 0.2
-			now_waiting_for = 0
+			now_waiting_for = 0.0
 
 			# wait for 2 minutes, which is already quite long for a live translation task
 			while task.status != "STATUS_SUCCESSFUL" and task.status != "STATUS_FAILED" and now_waiting_for < 120:
