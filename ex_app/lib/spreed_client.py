@@ -48,9 +48,8 @@ from models import LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp
 from transcriber import VoskTranscriber
 from utils import get_ssl_context, hmac_sha256, sanitize_websocket_url
-from websockets import ClientConnection
+from websockets import ClientConnection, connect
 from websockets import State as WsState
-from websockets import connect
 from websockets.exceptions import WebSocketException
 
 LOGGER = logging.getLogger("lt.spreed_client")
