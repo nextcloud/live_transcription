@@ -146,7 +146,8 @@ class OCPTranslator(ATranslator):
 					LOGGER.warning(
 						"Rate limited during translation task scheduling, waiting 30s before retrying",
 						extra={
-							"origin_language": self.origin_language,
+							"room_language": self.origin_language,
+							"origin_language": origin_language,
 							"target_language": self.target_language,
 							"tries_left": sched_tries,
 							"tag": "translate",
@@ -162,7 +163,8 @@ class OCPTranslator(ATranslator):
 					) from e
 
 				LOGGER.error("NextcloudException during translation task scheduling", exc_info=e, extra={
-					"origin_language": self.origin_language,
+					"room_language": self.origin_language,
+					"origin_language": origin_language,
 					"target_language": self.target_language,
 					"tries_left": sched_tries,
 					"nc_exc_reason": str(e.reason),
@@ -176,7 +178,8 @@ class OCPTranslator(ATranslator):
 		try:
 			task = TaskResponse.model_validate(response).task
 			LOGGER.debug("Initial translation task schedule response", extra={
-				"origin_language": self.origin_language,
+				"room_language": self.origin_language,
+				"origin_language": origin_language,
 				"target_language": self.target_language,
 				"task": task,
 				"tag": "translate",
@@ -205,7 +208,8 @@ class OCPTranslator(ATranslator):
 						LOGGER.warning(
 							"Rate limited during translation task polling, waiting 10s before retrying",
 							extra={
-								"origin_language": self.origin_language,
+								"room_language": self.origin_language,
+								"origin_language": origin_language,
 								"target_language": self.target_language,
 								"tries_so_far": i,
 								"waiting_time": now_waiting_for,
@@ -218,7 +222,8 @@ class OCPTranslator(ATranslator):
 					raise TranslateException("Failed to poll TaskProcessing translation task") from e
 				except niquests.RequestException as e:
 					LOGGER.warning("Ignored error during task polling", exc_info=e, extra={
-						"origin_language": self.origin_language,
+						"room_language": self.origin_language,
+						"origin_language": origin_language,
 						"target_language": self.target_language,
 						"tries_so_far": i,
 						"waiting_time": now_waiting_for,
@@ -230,7 +235,8 @@ class OCPTranslator(ATranslator):
 
 				task = TaskResponse.model_validate(response).task
 				LOGGER.debug(f"Translation task poll ({i * 5}s) response", extra={  # noqa: G004
-					"origin_language": self.origin_language,
+					"room_language": self.origin_language,
+					"origin_language": origin_language,
 					"target_language": self.target_language,
 					"tries_so_far": i,
 					"waiting_time": now_waiting_for,
@@ -244,7 +250,8 @@ class OCPTranslator(ATranslator):
 			raise TranslateException(
 				f"TaskProcessing translation task failed with status {task.status} "
 				f"after waiting {now_waiting_for} seconds "
-				f"for origin_language={self.origin_language} and target_language={self.target_language}",
+				f"for origin_language={origin_language} and target_language={self.target_language} "
+				f"in a room with language {self.origin_language}",
 			)
 
 		if not isinstance(task.output, dict) or "output" not in task.output:
