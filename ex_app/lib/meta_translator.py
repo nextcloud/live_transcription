@@ -4,6 +4,7 @@
 #
 
 import asyncio
+import dataclasses
 import logging
 
 from atranslator import ATranslator
@@ -229,10 +230,15 @@ class MetaTranslator:
 				async with self.translators_lock:
 					_tasks = []
 					for translator in self.translators.values():
-						segment.target_language = translator.target_language
-						segment.target_nc_session_ids = translator.nc_session_ids.copy()
+						# every translator needs its own copy: they run concurrently and
+						# __handle_translation writes the translation back into the segment
+						translator_segment = dataclasses.replace(
+							segment,
+							target_language=translator.target_language,
+							target_nc_session_ids=translator.nc_session_ids.copy(),
+						)
 						_tasks.append(asyncio.wait_for(
-							self.__handle_translation(translator, segment),
+							self.__handle_translation(translator, translator_segment),
 							timeout=OCP_TASK_TIMEOUT,
 						))
 					# await all translation tasks, they have their own callbacks to put results into the output queue

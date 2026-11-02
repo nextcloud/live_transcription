@@ -8,6 +8,7 @@ import dataclasses
 import json
 import logging
 import os
+import time
 import weakref
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -44,7 +45,7 @@ from livetypes import (
 )
 from meta_translator import MetaTranslator
 from models import LANGUAGE_MAP
-from nc_py_api import NextcloudApp
+from nc_py_api import AsyncNextcloudApp
 from transcriber import VoskTranscriber
 from utils import get_ssl_context, hmac_sha256, sanitize_websocket_url
 from websockets import ClientConnection
@@ -61,6 +62,11 @@ class PeerConnection:
 	pc: RTCPeerConnection
 
 
+# How long to wait for an offer after sending a "requestoffer" before sending
+# another request for the same session id. In seconds.
+OFFER_REQUEST_COOLDOWN = 10
+
+
 class SpreedClient:
 	def __init__(
 		self,
@@ -74,6 +80,8 @@ class SpreedClient:
 		self._monitor: asyncio.Task | None = None
 		self.peer_connections: dict[str, PeerConnection] = {}
 		self.peer_connection_lock = asyncio.Lock()
+		# sessions with an in-flight "requestoffer": {session_id: request time}
+		self._offer_requested: dict[str, float] = {}
 		self.targets: dict[str, Target] = {}
 		self.target_lock = asyncio.Lock()
 		self.nc_sid_map: dict[str, str] = {}  # {"nc_session_id": "session_id"}, use the same target lock
@@ -102,9 +110,7 @@ class SpreedClient:
 		self.resumeid = None
 		self.sessionid = None
 
-		nc = NextcloudApp()
 		self._websocket_url = sanitize_websocket_url(os.environ["LT_HPB_URL"])
-		self._backendURL = nc.app_cfg.endpoint + "/ocs/v2.php/apps/spreed/api/v3/signaling/backend"
 		self.secret = os.environ["LT_INTERNAL_SECRET"]
 
 		self.room_token = room_token
@@ -436,6 +442,14 @@ class SpreedClient:
 
 	async def send_hello(self):
 		nonce = token_urlsafe(64)
+		nc = AsyncNextcloudApp()
+		abs_url_res = await nc.ocs(
+			"GET",
+			"/ocs/v1.php/apps/app_api/api/v1/info/nextcloud_url/absolute",
+			params={"url": ""},
+		)
+		nc_public_url = abs_url_res.get("absolute_url") or nc.app_cfg.endpoint
+
 		await self.send_message({
 			"type": "hello",
 			"hello": {
@@ -445,7 +459,7 @@ class SpreedClient:
 					"params": {
 						"random": nonce,
 						"token": hmac_sha256(self.secret, nonce),
-						"backend": self._backendURL,
+						"backend": nc_public_url,
 					}
 				},
 			},
@@ -929,6 +943,8 @@ class SpreedClient:
 								await self.transcribers[user_desc["sessionId"]].shutdown()
 								del self.transcribers[user_desc["sessionId"]]
 						await self.remove_target_hpb_sid(user_desc["sessionId"])
+						async with self.peer_connection_lock:
+							self._offer_requested.pop(user_desc["sessionId"], None)
 						async with self.target_lock:
 							# "nextcloudSessionId" may not be present in the user_desc in call disconnects
 							self.nc_sid_map.pop(user_desc.get("nextcloudSessionId", ""), None)
@@ -936,15 +952,15 @@ class SpreedClient:
 
 					# user connected, keep a map of Nextcloud session IDs to HPB session IDs
 					async with self.target_lock:
-						# not sure why a KeyError is hit when the monitor task is cancelled,
-						# adding a guard to prevent error logs
+						# only in-call changes carry the Nextcloud session ID, the update sent when
+						# a participant is modified (name, type, permissions) does not
 						if "nextcloudSessionId" in user_desc:
 							# todo: get the userid for the session ids and maintain a map in "sid_translation_lang_map"
 							# todo: use the ownerId of the room for the OCP translations, using talk api, or something.
 							self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
 
 					# if this is one of the deferred targets, add it to the targets
-					if (user_desc["nextcloudSessionId"] in self._nc_sid_wait_stash):
+					if (user_desc.get("nextcloudSessionId") in self._nc_sid_wait_stash):
 						LOGGER.debug("Adding one of the deferred targets to the target dict", extra={
 							"nc_session_id": user_desc["nextcloudSessionId"],
 							"session_id": user_desc["sessionId"],
@@ -972,6 +988,18 @@ class SpreedClient:
 									"tag": "participants",
 								})
 								continue
+							last_request = self._offer_requested.get(user_desc["sessionId"])
+							if (
+								last_request is not None
+								and time.monotonic() - last_request < OFFER_REQUEST_COOLDOWN
+							):
+								LOGGER.info("Offer request already in flight, skipping duplicate", extra={
+									"user_desc": user_desc,
+									"room_token": self.room_token,
+									"tag": "participants",
+								})
+								continue
+							self._offer_requested[user_desc["sessionId"]] = time.monotonic()
 						await self.send_offer_request(user_desc["sessionId"])
 						continue
 
@@ -1070,6 +1098,7 @@ class SpreedClient:
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
 		async with self.peer_connection_lock:
+			self._offer_requested.pop(spkr_sid, None)
 			if (
 				spkr_sid in self.peer_connections
 				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
@@ -1129,6 +1158,7 @@ class SpreedClient:
 				async with weakself().peer_connection_lock:
 					if spkr_sid in weakself().peer_connections:
 						del weakself().peer_connections[spkr_sid]
+					weakself()._offer_requested.pop(spkr_sid, None)
 
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
@@ -1198,7 +1228,11 @@ class SpreedClient:
 
 		answer = await pc.createAnswer()
 		await pc.setLocalDescription(answer)
-		await self.send_offer_answer(message["message"]["data"]["from"], message["message"]["data"]["sid"], answer.sdp)
+		await self.send_offer_answer(
+			message["message"]["data"]["from"],
+			message["message"]["data"]["sid"],
+			answer.sdp,
+		)
 		LOGGER.debug("Sent answer for offer from %s", spkr_sid, extra={
 			"session_id": spkr_sid,
 			"answer": answer,
