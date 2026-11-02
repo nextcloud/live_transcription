@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
-from aiortc.sdp import candidate_from_sdp
+from aiortc.sdp import SessionDescription, candidate_from_sdp
 from audio_stream import AudioStream
 from constants import (
 	CALL_LEAVE_TIMEOUT,
@@ -1111,6 +1111,35 @@ class SpreedClient:
 				})
 				return
 
+		try:
+			media_desc = SessionDescription.parse(
+				message["message"]["data"]["payload"]["sdp"]
+			).media
+		except Exception as e:
+			LOGGER.warning("Could not parse offer for media lines, skipping", exc_info=e, extra={
+				"session_id": spkr_sid,
+				"room_type": message["message"]["data"].get("roomType"),
+				"room_token": self.room_token,
+				"tag": "offer",
+			})
+			return
+
+		offer_media_kinds = [
+			media.kind
+			for media in media_desc
+			if media.kind in ("audio", "video")
+		]
+
+		if "audio" not in offer_media_kinds:
+			LOGGER.debug("Offer carries no audio, ignoring it", extra={
+				"session_id": spkr_sid,
+				"room_type": message["message"]["data"].get("roomType"),
+				"media_kinds": offer_media_kinds,
+				"room_token": self.room_token,
+				"tag": "offer",
+			})
+			return
+
 		ice_servers = []
 		for stunserver in self.hpb_settings.stunservers:
 			ice_servers.append(
@@ -1160,7 +1189,13 @@ class SpreedClient:
 						del weakself().peer_connections[spkr_sid]
 					weakself()._offer_requested.pop(spkr_sid, None)
 
-		pc.addTransceiver("audio", direction="recvonly")
+		# explicitly decline video track so aiortc does not try downloading and decoding it
+		for media in offer_media_kinds:
+			if media == "audio":
+				pc.addTransceiver("audio", direction="recvonly")
+			else:
+				pc.addTransceiver(media, direction="inactive")
+
 		@pc.on("track")
 		async def on_track(track):
 			if track.kind == "audio":
