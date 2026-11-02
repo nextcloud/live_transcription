@@ -324,8 +324,15 @@ class OCPTranslator(ATranslator):
 					origin_language,
 				)
 				return False
+
+			# origin_language is not available but detect_language is
 			async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
 				OCP_AUTO_DETECT_ORIGIN_LANGS.add(origin_language)
+		else:
+			# origin_language is available, prefer that over detect_language
+			# can happen when the provider changes
+			async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+				OCP_AUTO_DETECT_ORIGIN_LANGS.discard(origin_language)
 
 		if not any(
 			tlang.value == target_language
