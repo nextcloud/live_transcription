@@ -65,6 +65,11 @@ IMPORTANT: Environment variables "LT_HPB_URL" and "LT_INTERNAL_SECRET" are requi
 				<display-name>Max concurrent transcription workers (optional)</display-name>
 				<description>This limits concurrency of the transcription and by extension the max GPU/system memory usage. One worker processes one stream at a time. The default is calculated based on the CPU thread count of the server.</description>
 			</variable>
+			<variable>
+				<name>LT_OCP_TASK_TIMEOUT</name>
+				<display-name>Translation task timeout in seconds (optional)</display-name>
+				<description>How long to wait for one live translation task to complete. Raise it when the configured machine translation provider is slow, at the cost of translated transcripts lagging further behind the call. Values below 5 are raised to 5, and a value that is not a whole number is ignored with a warning. The default is 30.</description>
+			</variable>
 		</environment-variables>
 	</external-app>
 </info>
