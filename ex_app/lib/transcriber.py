@@ -54,8 +54,7 @@ class Transcriber:
 					"ssl": ssl_ctx,
 				} if ssl_ctx else {}),
 				open_timeout=ASR_CONNECT_TIMEOUT,
-				# PCM barely compresses (to 0.76 of its size) and deflating it costs
-				# CPU on both ends, so do not offer permessage-deflate.
+				# PCM compresses only to 0.76 of its size, not worth the CPU cost on both ends
 				compression=None,
 			)
 			await self.__asrcon.send(
@@ -66,8 +65,7 @@ class Transcriber:
 					}
 				})
 			)
-			# Read the reply here. Left unread, it answers the first audio frame and
-			# every later reply arrives one frame late.
+
 			try:
 				await self.__await_config_ack(self.__language)
 			except BaseException:
@@ -77,12 +75,11 @@ class Transcriber:
 				raise
 
 	async def __await_config_ack(self, language: str) -> None:
-		"""Read replies until the one to a config message, and raise unless it reports success.
+		"""Read replies until the reply to a config message, and raise if it does not report success.
 
-		Replies to audio frames already in flight may arrive first, thus up to
-		MAX_CONNECT_TRIES of them are skipped. Each reply is parsed as JSON before
-		the key is looked up, because a partial transcript can contain the word
-		"success". The caller holds __asrcon_lock.
+		Replies to audio frames that are already sent can arrive first, so skip up
+		to MAX_CONNECT_TRIES of them. Parse each reply as JSON, because a partial
+		transcript can contain the word "success". The caller holds __asrcon_lock.
 		"""
 		if not self.__asrcon:
 			raise ASRException("ASR connection is not established")
@@ -189,6 +186,7 @@ class Transcriber:
 
 		try:
 			while True:
+				# todo: decouple stream reception and transcript reception, maybe with a timeout on stream.receive()
 				fr = await stream.receive()
 				frames.append(fr)
 

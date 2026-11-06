@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py313"
 
 [tool.ruff.lint]
 select = ["A", "B", "C", "D", "E", "F", "G", "I", "S", "SIM", "PIE", "Q", "RET", "RUF", "UP" , "W"]
@@ -17,7 +17,7 @@ indent = "tab"
 line_length = 120
 
 [tool.pylint]
-master.py-version = "3.11"
+master.py-version = "3.13"
 master.extension-pkg-allow-list = ["pydantic"]
 design.max-attributes = 8
 design.max-locals = 16

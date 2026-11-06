@@ -25,10 +25,10 @@ DEFAULT_ASR_SERVER_URL = "ws://localhost:2702"
 
 
 def _env_with_deprecated_name(name: str, deprecated: str) -> str | None:
-	"""Read name, falling back to its pre-3.0 name with a deprecation warning.
+	"""Read name, or else its pre-3.0 name with a deprecation warning.
 
-	The Vosk-era names are honoured for one major release, because an install
-	that still sets them would otherwise silently switch to the internal server.
+	Without this fallback, an installation that still sets a Vosk-era name would
+	silently use the internal server.
 	"""
 	value = os.environ.get(name)
 	if value:

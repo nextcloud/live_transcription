@@ -296,10 +296,10 @@ class OCPTranslator(ATranslator):
 	@staticmethod
 	@timed_cache_async()
 	async def provider_origin(origin_language: str) -> str:
-		"""The provider's id for a room language, which may be regional, as in pt_BR.
+		"""The provider's id for a room language, which can be regional, as in pt_BR.
 
-		The regional id is used when the provider lists it, and its bare language
-		otherwise, which is the same fallback Talk applies to target languages.
+		Use the regional id if the provider lists it, otherwise its bare language.
+		Talk uses the same fallback for target languages.
 		"""
 		task_types = await OCPTranslator.__get_task_types()
 		origins = {o.value for o in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]}
@@ -317,8 +317,8 @@ class OCPTranslator(ATranslator):
 		task_types = await OCPTranslator.__get_task_types()
 		provider_origin = await OCPTranslator.provider_origin(origin_language)
 
-		# A room transcribed with automatic detection has no origin language to
-		# name, thus it can only be translated with automatic detection too.
+		# A room with automatic detection has no known origin language, so it can
+		# only be translated with automatic detection.
 		if origin_language == DETECT_LANGUAGE or not any(
 			olang.value == provider_origin
 			for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]

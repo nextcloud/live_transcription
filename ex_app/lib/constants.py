@@ -5,10 +5,8 @@
 
 MSG_RECEIVE_TIMEOUT = 10  # seconds
 MAX_CONNECT_TRIES = 5  # maximum number of connection attempts
-# Number of 20 ms audio frames to collect before sending to the ASR server. 16
-# frames are 320 ms, which is the model's chunk, so every send completes exactly
-# one decode instead of leaving audio waiting for the next send. Against 400 ms
-# sends, p95 word latency fell from 984 ms to 735 ms at the same CPU cost.
+# Number of 20 ms audio frames to collect before each send to the ASR server.
+# 16 frames are 320 ms, the model's chunk size, so each send gives exactly one decode.
 MAX_AUDIO_FRAMES = 16
 MIN_TRANSCRIPT_SEND_INTERVAL = 0.3  # min seconds to wait before sending a partial transcript again
 HPB_SHUTDOWN_TIMEOUT = 30  # seconds to wait for the ws connectino to shut down gracefully

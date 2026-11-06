@@ -5,23 +5,13 @@
 
 from livetypes import LanguageMetadata, LanguageModel
 
-# Hugging Face repo holding the sherpa-onnx export of
-# nvidia/nemotron-3.5-asr-streaming-0.6b, pinned by revision.
+# Hugging Face repo with the sherpa-onnx export of nvidia/nemotron-3.5-asr-streaming-0.6b.
 MODEL_REPO = "csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8-2026-06-11"
 MODEL_REVISION = "424ce58898995b713f84341f2e1492f9207a26aa"
 MODEL_DIR_NAME = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8"
 
-# The files of each export of the model, by the role sherpa-onnx gives them, in
-# the order the ASR server prefers them. It loads the first export whose files
-# are all present.
-#
-# The app downloads every name here, and a name that the pinned repository does
-# not have is skipped, so the same table serves both repositories. The pinned one
-# ships int8 weights only. The fp32 export is the repository of the same name
-# without "-int8", and it keeps the encoder weights in encoder.data, which must
-# finish downloading before the encoder can load. Measured against that fp32
-# export on 90 s of speech, int8 diverged by 2.9 % while using a third of the
-# disk, a third of the memory and 0.27 RTF against 0.43.
+# Files of each model export, by sherpa-onnx role, in the order of preference.
+# The ASR server loads the first export that has all its files.
 MODEL_FILES_PATTERNS: dict[str, dict[str, str]] = {
 	"int8": {
 		"tokens": "tokens.txt",
@@ -38,49 +28,40 @@ MODEL_FILES_PATTERNS: dict[str, dict[str, str]] = {
 	},
 }
 
-# Silero VAD, used to keep silent participants off the decoder.
+# Silero VAD, so that silent participants are not decoded.
 VAD_MODEL_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 VAD_MODEL_NAME = "silero_vad.onnx"
 
-# The language id that lets the model detect the spoken language by itself. It
-# is the default, and it is what any language without a prompt below falls back
-# to. On the test clips in eight languages it gave the same text as the explicit
-# prompt, and it follows a speaker who changes language mid-stream, which an
-# explicit prompt does not: a wrong prompt produced no text at all for English
-# prompted as Japanese.
-#
-# TODO: Talk still treats English as the default. A room with no language set
-# starts its call without a langId, so it gets DETECT_LANGUAGE here, but Talk's
-# set-language call and its call view substitute "en", and its room settings
-# label the empty choice "Default language (English)". Making automatic
-# detection the default everywhere needs those changed in spreed
+# TODO: Talk still uses English as the default. A room without a language starts
+# its call without a langId and gets DETECT_LANGUAGE, but Talk's set-language
+# call and call view send "en", and its room settings show the empty choice as
+# "Default language (English)". Changes in spreed are necessary for that
 # (lib/Service/LiveTranscriptionService.php, src/components/CallView/BottomBar.vue,
 # src/components/ConversationSettings/LiveTranscriptionSettings.vue).
 DETECT_LANGUAGE = "detect_language"
 
-# Language id to the prompt the model is conditioned on for every chunk.
+# Language id to the prompt that the nemotron model receives.
 #
-# One model covers every entry, thus there is no per-language model to download.
-# These are the locales NVIDIA lists as usable out of the box: 19
-# transcription-ready and 13 broad-coverage ones. The model card lists 8 more
-# adaptation-ready locales, which need fine-tuning before they transcribe, thus
-# they are absent and fall back to auto-detection.
+# These are all 40 locales that NVIDIA lists for the model: 19
+# transcription-ready, 13 broad-coverage and 8 adaptation-ready. NVIDIA says
+# that the adaptation-ready locales (el, he, lt, lv, mt, nn, sl, th) need
+# fine-tuning for full transcription, so expect a lower accuracy for them.
 #
-# The values are full locales and not the bare language ids the app uses. The
-# model's own prompt table, which is metadata_props["prompt_dictionary"] inside
-# encoder.onnx, has no bare "ja", "vi" or "zh". It also maps a bare "es" to
-# es-US while the app means es-ES.
+# The values are full locales, because the model's prompt table
+# (metadata_props["prompt_dictionary"] in encoder.onnx) has no bare "ja", "vi"
+# or "zh", and it maps a bare "es" to es-US while the app means es-ES.
 #
-# The four languages the model knows in two regions get a second, regional id
-# in Nextcloud's own ll_CC form, which Talk stores and shows as it is. The bare
-# id keeps meaning the region it meant before.
+# The four languages that the model knows in two regions (English, Spanish,
+# French and Portuguese) also get a regional id in Nextcloud's ll_CC form
+# (en_GB, es_US, fr_CA and pt_BR). The bare id keeps its previous region.
 LANGUAGE_PROMPTS = {
-	DETECT_LANGUAGE: DETECT_LANGUAGE,
+	DETECT_LANGUAGE: "auto",  # sherpa expects "auto", whereas "detect_language" is conventional in NC
 	"ar": "ar-AR",
 	"bg": "bg-BG",
 	"cs": "cs-CZ",
 	"da": "da-DK",
 	"de": "de-DE",
+	"el": "el-GR",
 	"en": "en-US",
 	"en_GB": "en-GB",
 	"es": "es-ES",
@@ -89,15 +70,18 @@ LANGUAGE_PROMPTS = {
 	"fi": "fi-FI",
 	"fr": "fr-FR",
 	"fr_CA": "fr-CA",
+	"he": "he-IL",
 	"hi": "hi-IN",
 	"hr": "hr-HR",
 	"hu": "hu-HU",
 	"it": "it-IT",
 	"ja": "ja-JP",
 	"ko": "ko-KR",
+	"lt": "lt-LT",
+	"lv": "lv-LV",
+	"mt": "mt-MT",
 	"nl": "nl-NL",
-	# The app's language table calls Norwegian "no", and the model prompt is
-	# Bokmal.
+	"nn": "nn-NO",
 	"no": "nb-NO",
 	"pl": "pl-PL",
 	"pt": "pt-PT",
@@ -105,7 +89,9 @@ LANGUAGE_PROMPTS = {
 	"ro": "ro-RO",
 	"ru": "ru-RU",
 	"sk": "sk-SK",
+	"sl": "sl-SI",
 	"sv": "sv-SE",
+	"th": "th-TH",
 	"tr": "tr-TR",
 	"uk": "uk-UA",
 	"vi": "vi-VN",
@@ -386,6 +372,7 @@ LANGUAGE_MAP = {
 	"nij": LanguageModel(name="Ngaju"),
 	"niq": LanguageModel(name="Nandi"),
 	"nl": LanguageModel(name="Nederlands"),
+	"nn": LanguageModel(name="Norwegian Nynorsk"),
 	"nnb": LanguageModel(name="Nande"),
 	"no": LanguageModel(name="Norwegian"),
 	"noa": LanguageModel(name="Woun Meu"),
