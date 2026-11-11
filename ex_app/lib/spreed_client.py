@@ -646,8 +646,12 @@ class SpreedClient:
 				"room_token": self.room_token,
 				"tag": "transcriber",
 			})
-			for transcriber in self.transcribers.values():
-				await transcriber.shutdown()
+			async with self.transcriber_lock:
+				transcribers_snap = list(self.transcribers.values())
+
+			for transcriber in transcribers_snap:
+				with suppress(Exception):
+					await transcriber.shutdown()
 			async with self.transcriber_lock:
 				self.transcribers.clear()
 
