@@ -940,12 +940,6 @@ class SpreedClient:
 							"room_token": self.room_token,
 							"tag": "participants",
 						})
-						# the transcription should automatically stop when the audio track is closed
-						# cleaning it up in this class
-						async with self.transcriber_lock:
-							if user_desc["sessionId"] in self.transcribers:
-								await self.transcribers[user_desc["sessionId"]].shutdown()
-								del self.transcribers[user_desc["sessionId"]]
 						await self.release_peer_connection(user_desc["sessionId"])
 						await self.remove_target_hpb_sid(user_desc["sessionId"])
 						async with self.target_lock:
@@ -1097,39 +1091,33 @@ class SpreedClient:
 				self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 		self._deferred_close_task = None
 
-	async def release_peer_connection(self, session_id: str) -> None:
-		"""Remove the peer connection stored for a speaker and close it."""
-		async with self.peer_connection_lock:
-			self._offer_requested.pop(session_id, None)
-			entry = self.peer_connections.pop(session_id, None)
+	async def release_peer_connection(self, session_id: str, pc: RTCPeerConnection | None = None) -> None:
+		"""Release a speaker's peer connection, transcriber and pending offer request.
 
-		if entry is None:
-			return
-		if entry.pc.connectionState == "closed":
-			return
-
-		with suppress(Exception):
-			await entry.pc.close()
-
-	async def release_failed_peer_connection(self, session_id: str, pc: RTCPeerConnection) -> None:
-		"""Remove a peer connection that failed or closed and make sure it is closed.
-
-		Used from the connection's own state change handler. The entry is removed only
-		if it is still this connection, a newer offer from the same speaker can have
-		replaced it already, under the same key.
+		Cleanup when peer connection does not exist.
+		When it does exist and has not been replaced from a newer offer, close it.
+		If it's a different pc object, the transcriber and the offer request then
+		belong to the new connection. pc itself is closed in either case.
 		"""
 		async with self.peer_connection_lock:
-			self._offer_requested.pop(session_id, None)
 			entry = self.peer_connections.get(session_id)
-			if entry is not None and entry.pc is pc:
-				del self.peer_connections[session_id]
+			# when pc is None, the user disconnected so pc from `peer_connections` should be cleaned and stopped
+			owned = pc is None or (entry is not None and entry.pc is pc)
+			if owned:
+				self._offer_requested.pop(session_id, None)
+				if entry is not None:
+					del self.peer_connections[session_id]
+					pc = entry.pc
 
-		if pc.connectionState == "closed":
-			return
+		if owned:
+			async with self.transcriber_lock:
+				if (transcriber := self.transcribers.pop(session_id, None)) is not None:
+					await transcriber.shutdown()
 
 		# a "failed" connection still holds its receivers until it is closed
-		with suppress(Exception):
-			await pc.close()
+		if pc is not None and pc.connectionState != "closed":
+			with suppress(Exception):
+				await pc.close()
 
 	async def handle_offer(self, message):  # noqa: C901
 		"""Handle incoming offer messages."""
@@ -1223,7 +1211,7 @@ class SpreedClient:
 					"room_token": weakself().room_token,
 					"tag": "peer_connection",
 				})
-				await weakself().release_failed_peer_connection(spkr_sid, pc)
+				await weakself().release_peer_connection(spkr_sid, pc)
 
 		# explicitly decline video track so aiortc does not try downloading and decoding it
 		for media in offer_media_kinds:
@@ -1349,11 +1337,12 @@ class SpreedClient:
 		excs = []
 		async with self.transcriber_lock:
 			transcribers = list(self.transcribers.values())
-		try:
-			for transcriber in transcribers:
+		# one failing transcriber must not keep the others in the old language
+		for transcriber in transcribers:
+			try:
 				await transcriber.set_language(lang_id)
-		except Exception as e:
-			excs.append(e)
+			except Exception as e:
+				excs.append(e)
 		if len(excs) > 1:
 			LOGGER.error("Failed to set language for multiple transcribers", extra={
 				"lang_id": lang_id,
