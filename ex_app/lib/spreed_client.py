@@ -646,23 +646,36 @@ class SpreedClient:
 				"room_token": self.room_token,
 				"tag": "transcriber",
 			})
-			for transcriber in self.transcribers.values():
-				await transcriber.shutdown()
+			async with self.transcriber_lock:
+				transcribers_snap = list(self.transcribers.values())
+
+			coros = [t.shutdown() for t in transcribers_snap]
+			with suppress(Exception):
+				await asyncio.gather(*coros, return_exceptions=True)
+
 			async with self.transcriber_lock:
 				self.transcribers.clear()
 
 		with suppress(Exception):
-			for pc in self.peer_connections.values():
-				if pc.pc.connectionState != "closed" and pc.pc.connectionState != "failed":
+			# Take the entries out first: each close() fires the state change
+			# handler, which removes its entry from the same dict.
+			async with self.peer_connection_lock:
+				peer_connections = list(self.peer_connections.values())
+				self.peer_connections.clear()
+				self._offer_requested.clear()
+
+			# a "failed" connection still holds its receivers until it is closed
+			to_close_coros = []
+			for pc in peer_connections:
+				if pc.pc.connectionState != "closed":
 					LOGGER.debug("Closing peer connection", extra={
 						"session_id": pc.session_id,
 						"room_token": self.room_token,
 						"tag": "peer_connection",
 					})
-					with suppress(Exception):
-						await pc.pc.close()
-			async with self.peer_connection_lock:
-				self.peer_connections.clear()
+					to_close_coros.append(pc.pc.close())
+
+			await asyncio.gather(*to_close_coros, return_exceptions=True)
 			self.resumeid = None
 			self.sessionid = None
 
@@ -935,15 +948,8 @@ class SpreedClient:
 							"room_token": self.room_token,
 							"tag": "participants",
 						})
-						# the transcription should automatically stop when the audio track is closed
-						# cleaning it up in this class
-						async with self.transcriber_lock:
-							if user_desc["sessionId"] in self.transcribers:
-								await self.transcribers[user_desc["sessionId"]].shutdown()
-								del self.transcribers[user_desc["sessionId"]]
+						await self.release_peer_connection(user_desc["sessionId"])
 						await self.remove_target_hpb_sid(user_desc["sessionId"])
-						async with self.peer_connection_lock:
-							self._offer_requested.pop(user_desc["sessionId"], None)
 						async with self.target_lock:
 							# "nextcloudSessionId" may not be present in the user_desc in call disconnects
 							self.nc_sid_map.pop(user_desc.get("nextcloudSessionId", ""), None)
@@ -1093,6 +1099,34 @@ class SpreedClient:
 				self._close_task = asyncio.create_task(self.close(), name=f"close-{self.room_token}")
 		self._deferred_close_task = None
 
+	async def release_peer_connection(self, session_id: str, pc: RTCPeerConnection | None = None) -> None:
+		"""Release a speaker's peer connection, transcriber and pending offer request.
+
+		Cleanup when peer connection does not exist.
+		When it does exist and has not been replaced from a newer offer, close it.
+		If it's a different pc object, the transcriber and the offer request then
+		belong to the new connection. pc itself is closed in either case.
+		"""
+		async with self.peer_connection_lock:
+			entry = self.peer_connections.get(session_id)
+			# when pc is None, the user disconnected so pc from `peer_connections` should be cleaned and stopped
+			owned = pc is None or (entry is not None and entry.pc is pc)
+			if owned:
+				self._offer_requested.pop(session_id, None)
+				if entry is not None:
+					del self.peer_connections[session_id]
+					pc = entry.pc
+
+		if owned:
+			async with self.transcriber_lock:
+				if (transcriber := self.transcribers.pop(session_id, None)) is not None:
+					await transcriber.shutdown()
+
+		# a "failed" connection still holds its receivers until it is closed
+		if pc is not None and pc.connectionState != "closed":
+			with suppress(Exception):
+				await pc.close()
+
 	async def handle_offer(self, message):  # noqa: C901
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
@@ -1176,17 +1210,16 @@ class SpreedClient:
 				})
 				return
 
-			if pc.connectionState == "failed":
-				LOGGER.warning("Peer connection state for '%s' is '%s'", spkr_sid, pc.connectionState, extra={
+			if pc.connectionState in ("failed", "closed"):
+				# log "closed" as INFO
+				log = LOGGER.warning if pc.connectionState == "failed" else LOGGER.info
+				log("Peer connection state for '%s' is '%s'", spkr_sid, pc.connectionState, extra={
 					"session_id": spkr_sid,
 					"connection_state": pc.connectionState,
 					"room_token": weakself().room_token,
 					"tag": "peer_connection",
 				})
-				async with weakself().peer_connection_lock:
-					if spkr_sid in weakself().peer_connections:
-						del weakself().peer_connections[spkr_sid]
-					weakself()._offer_requested.pop(spkr_sid, None)
+				await weakself().release_peer_connection(spkr_sid, pc)
 
 		# explicitly decline video track so aiortc does not try downloading and decoding it
 		for media in offer_media_kinds:
@@ -1214,6 +1247,10 @@ class SpreedClient:
 
 				stream = AudioStream(track)
 				async with weakself().transcriber_lock:
+					# A renegotiated track replaces the speaker's transcriber. Stop the old one,
+					# or its audio task and ASR connection keep running.
+					if (previous := weakself().transcribers.get(spkr_sid)) is not None:
+						await previous.shutdown()
 					weakself().transcribers[spkr_sid] = VoskTranscriber(
 						spkr_sid,
 						weakself().room_lang_id,
@@ -1308,11 +1345,12 @@ class SpreedClient:
 		excs = []
 		async with self.transcriber_lock:
 			transcribers = list(self.transcribers.values())
-		try:
-			for transcriber in transcribers:
+		# one failing transcriber must not keep the others in the old language
+		for transcriber in transcribers:
+			try:
 				await transcriber.set_language(lang_id)
-		except Exception as e:
-			excs.append(e)
+			except Exception as e:
+				excs.append(e)
 		if len(excs) > 1:
 			LOGGER.error("Failed to set language for multiple transcribers", extra={
 				"lang_id": lang_id,
