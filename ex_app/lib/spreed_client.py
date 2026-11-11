@@ -649,9 +649,10 @@ class SpreedClient:
 			async with self.transcriber_lock:
 				transcribers_snap = list(self.transcribers.values())
 
-			for transcriber in transcribers_snap:
-				with suppress(Exception):
-					await transcriber.shutdown()
+			coros = [t.shutdown() for t in transcribers_snap]
+			with suppress(Exception):
+				await asyncio.gather(*coros, return_exceptions=True)
+
 			async with self.transcriber_lock:
 				self.transcribers.clear()
 
@@ -662,16 +663,19 @@ class SpreedClient:
 				peer_connections = list(self.peer_connections.values())
 				self.peer_connections.clear()
 				self._offer_requested.clear()
+
+			# a "failed" connection still holds its receivers until it is closed
+			to_close_coros = []
 			for pc in peer_connections:
-				# a "failed" connection still holds its receivers until it is closed
 				if pc.pc.connectionState != "closed":
 					LOGGER.debug("Closing peer connection", extra={
 						"session_id": pc.session_id,
 						"room_token": self.room_token,
 						"tag": "peer_connection",
 					})
-					with suppress(Exception):
-						await pc.pc.close()
+					to_close_coros.append(pc.pc.close())
+
+			await asyncio.gather(*to_close_coros, return_exceptions=True)
 			self.resumeid = None
 			self.sessionid = None
 
