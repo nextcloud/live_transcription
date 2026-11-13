@@ -1,0 +1,359 @@
+# SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Integration test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - stable*
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-test-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest-low
+    permissions:
+      contents: read
+      pull-requests: read
+
+    outputs:
+      src: ${{ steps.changes.outputs.src}}
+
+    steps:
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        continue-on-error: true
+        with:
+          filters: |
+            src:
+              - 'ex_app/**'
+              - 'appinfo/**'
+              - 'tests/integration/**'
+              - 'Dockerfile'
+              - 'example.env'
+              - 'healthcheck.sh'
+              - 'start.sh'
+              - 'supervisord.conf'
+              - 'logger_config.yaml'
+              - 'requirements.txt'
+              - '.github/workflows/integration-test.yml'
+
+  integration:
+    runs-on: ubuntu-24.04
+
+    needs: changes
+    if: needs.changes.outputs.src != 'false'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - server-versions: 'stable33'
+            spreed-major: '23'
+          - server-versions: 'stable34'
+            spreed-major: '24'
+          - server-versions: 'stable35'
+            spreed-major: '25'
+
+    name: Live transcription in a Talk call on ${{ matrix.server-versions }}
+
+    env:
+      NC_URL: http://localhost:8080
+      PGSQL_PORT: 4445
+      # the HPB: signaling server on 8081, janus on 8188, both on the host network
+      HPB_URL: http://localhost:8081
+      HPB_SECRET: 4567
+      # example.env with the overrides for this runner, see "Prepare the app environment"
+      LT_ENV_FILE: ${{ github.workspace }}/live_transcription.env
+      # the app's persistent storage, where /init downloads the models
+      MODELS_DIR: ${{ github.workspace }}/lt_storage
+      BG_DIR: ${{ github.workspace }}/call
+      ROOM_NAME: Live transcription test
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        ports:
+          - 4445:5432/tcp
+        env:
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: rootpassword
+          POSTGRES_DB: nextcloud
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 2s --health-retries 5
+
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Checkout server
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: nextcloud/server
+          ref: ${{ matrix.server-versions }}
+          submodules: 'recursive'
+          persist-credentials: false
+
+      - name: Checkout the app
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          path: live_transcription
+          persist-credentials: false
+
+      - name: Checkout app_api
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: nextcloud/app_api
+          ref: ${{ matrix.server-versions }}
+          path: apps/app_api
+          persist-credentials: false
+
+      - name: Download the latest Talk release for the server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list -R nextcloud-releases/spreed --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -E '^v${{ matrix.spreed-major }}\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          [ -n "$tag" ] || { echo "::error::No Talk ${{ matrix.spreed-major }} release found"; exit 1; }
+          echo "Talk $tag"
+          gh release download "$tag" -R nextcloud-releases/spreed -p "spreed-$tag.tar.gz" -O - | tar -xz -C apps
+
+      - name: Set up php
+        uses: shivammathur/setup-php@cf4cade2721270509d5b1c766ab3549210a39a2a # v2.33.0
+        with:
+          php-version: '8.3'
+          extensions: mbstring, iconv, fileinfo, intl, pdo_pgsql, pgsql, gd, zip, curl
+          coverage: none
+
+      - name: Set up python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install the test dependencies
+        run: |
+          pip install aiortc av numpy requests websockets playwright
+          playwright install --with-deps chromium
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+
+      - name: Build the live_transcription CPU image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: live_transcription
+          push: false
+          load: true
+          platforms: linux/amd64
+          # a local tag, so the image is never pulled from the registry
+          tags: ghcr.io/nextcloud-releases/live_transcription:integration-test
+          target: runtime-cpu
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cache the models
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          # the model repo, its revision and the VAD URL are pinned in models.py
+          path: |
+            ${{ env.MODELS_DIR }}
+            !${{ env.MODELS_DIR }}/logs
+          key: lt-models-${{ hashFiles('live_transcription/ex_app/lib/models.py') }}
+
+      - name: Prepare the persistent storage
+        run: |
+          mkdir -p "$MODELS_DIR/logs"
+          chmod -R a+rwX "$MODELS_DIR"
+          ls -la "$MODELS_DIR"
+
+      - name: Prepare the app environment from example.env
+        run: |
+          cp live_transcription/example.env "$LT_ENV_FILE"
+          set_env() {
+            sed -i "/^$1=/d" "$LT_ENV_FILE"
+            echo "$1=$2" >> "$LT_ENV_FILE"
+          }
+          set_env AA_VERSION "$(sed -n 's|.*<version>\(.*\)</version>.*|\1|p' apps/app_api/appinfo/info.xml | head -1)"
+          set_env APP_VERSION "$(sed -n 's|.*<version>\(.*\)</version>.*|\1|p' live_transcription/appinfo/info.xml | head -1)"
+          # host network: listen on loopback only
+          set_env APP_HOST 127.0.0.1
+          # the mount point of $MODELS_DIR in the container
+          set_env APP_PERSISTENT_STORAGE /nc_app_live_transcription_data
+          set_env NEXTCLOUD_URL "$NC_URL"
+          set_env LT_HPB_URL "${HPB_URL/http/ws}/spreed"
+          cat "$LT_ENV_FILE"
+          # the HPB and the registration below use the same values as the app
+          grep -E '^(APP_ID|APP_SECRET|APP_PORT|APP_VERSION|LT_INTERNAL_SECRET)=' "$LT_ENV_FILE" >> "$GITHUB_ENV"
+
+      - name: Start the HPB (signaling server and Janus)
+        run: |
+          docker run -d --name janus --network host \
+            ghcr.io/nextcloud/nextcloud-dev-talk-janus@sha256:03feb5f579ad05a0845dacb1af53aa46a6fc69ce87e37b29f1f0d45144646c5e \
+            janus --full-trickle
+          docker run -d --name signaling --network host \
+            -e HTTP_LISTEN=127.0.0.1:8081 \
+            -e HASH_KEY=0123456789abcdef0123456789abcdef \
+            -e BLOCK_KEY=fedcba9876543210fedcba9876543210 \
+            -e INTERNAL_SHARED_SECRET_KEY="$LT_INTERNAL_SECRET" \
+            -e BACKENDS_ALLOWALL=true \
+            -e BACKENDS_ALLOWALL_SECRET="$HPB_SECRET" \
+            -e SKIP_VERIFY=true \
+            -e USE_JANUS=1 \
+            -e JANUS_URL=ws://127.0.0.1:8188 \
+            strukturag/nextcloud-spreed-signaling:2.2.0
+          timeout 60 bash -c 'until curl -fsS "$HPB_URL/api/v1/welcome"; do sleep 2; done' \
+            || { docker logs signaling; docker logs janus; exit 1; }
+          echo
+          # the signaling server must have connected to Janus, or no media can flow
+          timeout 60 bash -c 'until docker logs signaling 2>&1 | grep -q "Connected to Janus"; do sleep 2; done' \
+            || { docker logs signaling; docker logs janus; exit 1; }
+
+      - name: Set up Nextcloud
+        run: |
+          mkdir data
+          ./occ maintenance:install --verbose --database=pgsql --database-name=nextcloud --database-host=127.0.0.1 \
+            --database-port="$PGSQL_PORT" --database-user=root --database-pass=rootpassword \
+            --admin-user admin --admin-pass password
+          ./occ config:system:set overwrite.cli.url --value="$NC_URL"
+          ./occ config:system:set loglevel --value=2 --type=integer
+          PHP_CLI_SERVER_WORKERS=8 php -S localhost:8080 > php-server.log 2>&1 &
+          timeout 60 bash -c 'until curl -fsS "$NC_URL/status.php"; do sleep 1; done'
+          echo
+
+      - name: Enable Talk and AppAPI
+        run: |
+          ./occ app:enable --force spreed app_api
+          ./occ app:list --enabled | grep -E 'spreed|app_api'
+
+      - name: Configure the HPB in Talk
+        run: |
+          ./occ talk:signaling:add "$HPB_URL" "$HPB_SECRET"
+          ./occ talk:signaling:list
+          ./occ talk:stun:list
+          ./occ talk:turn:list
+
+      - name: Add the users
+        run: |
+          for user in user-starter user-speaker user-listener; do
+            OC_PASS="$user" ./occ user:add --password-from-env --display-name="$user" "$user"
+          done
+
+      - name: Create the conversation with the users
+        run: |
+          out=$(./occ talk:room:create "$ROOM_NAME" --owner user-starter \
+            --user user-starter --user user-speaker --user user-listener)
+          echo "$out"
+          token=$(sed -n 's/^Room token: //p' <<< "$out")
+          [ -n "$token" ] || { echo "::error::No room token in the output"; exit 1; }
+          echo "TOKEN=$token" >> "$GITHUB_ENV"
+          ./occ talk:monitor:room "$token"
+
+      - name: Start the live_transcription container
+        run: |
+          docker run -d --name live_transcription --network host --env-file "$LT_ENV_FILE" \
+            -v "$MODELS_DIR:/nc_app_live_transcription_data" \
+            ghcr.io/nextcloud-releases/live_transcription:integration-test
+          timeout 120 bash -c 'until curl -fsS "http://127.0.0.1:$APP_PORT/heartbeat"; do sleep 2; done' \
+            || { docker logs live_transcription; exit 1; }
+          echo
+
+      - name: Register live_transcription
+        # --wait-finish includes /init, which downloads the models into $MODELS_DIR
+        run: |
+          ./occ app_api:daemon:register --net host manual_install "Manual Install" manual-install http localhost "$NC_URL"
+          ./occ app_api:app:register "$APP_ID" manual_install --wait-finish --json-info \
+            "{\"id\":\"$APP_ID\",\"name\":\"Live Transcription\",\"daemon_config_name\":\"manual_install\",\"version\":\"$APP_VERSION\",\"secret\":\"$APP_SECRET\",\"port\":$APP_PORT}"
+          ./occ app_api:app:list
+          du -sh "$MODELS_DIR"/*
+
+      - name: Check that Talk offers live transcription
+        run: |
+          capability=$(curl -fsS -u admin:password -H 'OCS-APIRequest: true' "$NC_URL/ocs/v2.php/cloud/capabilities?format=json" \
+            | jq '.ocs.data.capabilities.spreed.config.call."live-transcription"')
+          echo "live-transcription capability: $capability"
+          [ "$capability" = "true" ] || { echo "::error::Talk does not offer live transcription"; exit 1; }
+          curl -fsS -u user-listener:user-listener -H 'OCS-APIRequest: true' -H 'Accept: application/json' \
+            "$NC_URL/ocs/v2.php/apps/spreed/api/v1/live-transcription/languages" | jq -c '.ocs.data | keys'
+
+      - name: Start the call in the browser as user-starter
+        run: |
+          # exits with 1 when calls are in progress
+          ./occ talk:active-calls || { echo "::error::A call runs before the test started one"; exit 1; }
+          live_transcription/tests/integration/bg.sh start starter 180 -- \
+            python3 live_transcription/tests/integration/start_call.py --url "$NC_URL" --token "$TOKEN" \
+              --user user-starter --password user-starter --screenshot "$BG_DIR/starter.png"
+          live_transcription/tests/integration/check_call.sh "$TOKEN" 1
+
+      - name: Join the call as user-speaker, looping speech
+        run: |
+          curl -fsSL -o "$BG_DIR/speech.wav" \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/4979e04f5dcaccb36057e059bbaed8a2f5288315/samples/jfk.wav
+          live_transcription/tests/integration/bg.sh start speaker 90 -- \
+            python3 live_transcription/tests/integration/talk_participant.py speaker --url "$NC_URL" --token "$TOKEN" \
+              --user user-speaker --password user-speaker --audio "$BG_DIR/speech.wav"
+          live_transcription/tests/integration/check_call.sh "$TOKEN" 2
+
+      - name: Join the call as user-listener and wait for the transcripts
+        run: |
+          live_transcription/tests/integration/bg.sh start listener 90 -- \
+            python3 live_transcription/tests/integration/talk_participant.py listener --url "$NC_URL" --token "$TOKEN" \
+              --user user-listener --password user-listener --speaker-user user-speaker \
+              --min-transcripts 10 --min-finals 1 --timeout 300
+          live_transcription/tests/integration/check_call.sh "$TOKEN" 3
+          live_transcription/tests/integration/bg.sh wait listener 330 starter speaker
+
+      - name: Leave the call
+        if: always()
+        run: |
+          live_transcription/tests/integration/bg.sh stop listener speaker starter
+          ./occ talk:monitor:calls || true
+
+      - name: Show logs
+        if: always()
+        run: |
+          for name in starter speaker listener; do
+            echo "::group::$name"; cat "$BG_DIR/$name.log" 2>/dev/null || true; echo "::endgroup::"
+          done
+          for container in live_transcription signaling janus; do
+            echo "::group::docker logs $container"; docker logs "$container" 2>&1 | tail -n 500 || true; echo "::endgroup::"
+          done
+          echo "::group::live_transcription lt.log"; tail -n 1000 "$MODELS_DIR/logs/lt.log" 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::nextcloud.log"; tail -n 300 data/nextcloud.log 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::php server"; tail -n 300 php-server.log 2>/dev/null || true; echo "::endgroup::"
+
+      - name: Upload logs and screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: integration-test-${{ matrix.server-versions }}
+          path: |
+            ${{ env.BG_DIR }}/*.log
+            ${{ env.BG_DIR }}/*.png
+            ${{ env.MODELS_DIR }}/logs/
+            ${{ env.LT_ENV_FILE }}
+            data/nextcloud.log
+            php-server.log
+          if-no-files-found: ignore
+
+  summary:
+    permissions:
+      contents: none
+    runs-on: ubuntu-latest-low
+    needs: [changes, integration]
+
+    if: always()
+
+    name: integration-test-summary
+
+    steps:
+      - name: Summary status
+        run: if ${{ needs.changes.outputs.src != 'false' && needs.integration.result != 'success' }}; then exit 1; fi
