@@ -331,3 +331,21 @@ If it's not, debugging can be done through
 2. error messages in the HPB server settings in Talk
 3. the browser console when opening a Talk room in the `Network` tab with `WS` filter
 4. checking reachability of ports with `nc -zv -w 5 <host> <port>`
+
+### Integration test
+
+`.github/workflows/integration-test.yml` builds the CPU image (`runtime-cpu`) from the checked-out code and runs it in a real Talk call. It sets up Nextcloud with Talk and AppAPI and an HPB (signaling server and Janus on the host network). The app downloads the ASR and VAD models on `/init` as in production, and the workflow caches the persistent storage keyed on `ex_app/lib/models.py`, which pins them.
+
+The app container gets its environment from `example.env`. The workflow copies the file and overrides only what depends on the runner: `AA_VERSION` and `APP_VERSION` from the checked-out `info.xml` files, `APP_HOST`, `APP_PERSISTENT_STORAGE`, `NEXTCLOUD_URL` and `LT_HPB_URL`. The HPB uses `LT_INTERNAL_SECRET` from the file as its internal secret, and the AppAPI registration uses `APP_ID`, `APP_SECRET`, `APP_PORT` and `APP_VERSION`. Keep the values in `example.env` unquoted, because `docker run --env-file` keeps quotes as part of the value.
+
+The call has three users, each with the user name as the password:
+
+| User | Joins with | Does |
+|---|---|---|
+| `user-starter` | headless Chromium (`tests/integration/start_call.py`) | starts the call in the Talk web UI |
+| `user-speaker` | `tests/integration/talk_participant.py speaker` | publishes a speech recording in a loop through the SFU |
+| `user-listener` | `tests/integration/talk_participant.py listener` | enables live transcription and counts the transcript messages on its signaling connection |
+
+The test passes when the listener receives 10 transcripts attributed to `user-speaker`, at least one of them final and one matching the spoken words. After each join, `tests/integration/check_call.sh` checks the call with `occ talk:monitor:room`, `talk:monitor:calls` and `talk:active-calls` and fails early if a participant is missing. `tests/integration/bg.sh` keeps the participants running across the workflow steps and fails the wait as soon as one of them exits.
+
+The two Python participants authenticate with an app password. With the login password, every request logs the user in again, and Talk ends the room session of a user who logs out, so the participant would drop out of the conversation right after joining it.
