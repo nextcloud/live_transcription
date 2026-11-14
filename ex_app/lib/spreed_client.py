@@ -1341,11 +1341,9 @@ class SpreedClient:
 				if timeout_count >= 5:
 					timeout = int(timeout * TIMEOUT_INCREASE_FACTOR)
 					LOGGER.error("Multiple timeouts while sending transcripts, increasing to %d", timeout, extra={
-						"origin_language": transcript.origin_language,
-						"target_language": transcript.target_language,
 						"speaker_session_id": transcript.speaker_session_id,
 						"room_token": self.room_token,
-						"tag": "translate",
+						"tag": "transcript",
 					})
 					timeout_count = 0
 				continue
