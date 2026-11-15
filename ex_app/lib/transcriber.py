@@ -35,6 +35,9 @@ class Transcriber:
 		self.__asrcon: ClientConnection | None = None
 		self.__asrcon_lock = asyncio.Lock()
 		self.audio_task: asyncio.Task | None = None
+		# True when the audio task ended because the speaker's track ended, and
+		# not because of the ASR connection or another error.
+		self.stream_ended = False
 
 		self.__server_url = asr_server_url()
 
@@ -274,6 +277,7 @@ class Transcriber:
 						target_nc_session_ids=set(),  # to be filled by MetaTranslator
 					))
 		except (StreamEndedException, MediaStreamError):
+			self.stream_ended = True
 			LOGGER.debug("Audio stream ended for session id: %s", self.__session_id, extra={
 				"session_id": self.__session_id,
 				"tag": "asr",

@@ -65,6 +65,8 @@ class PeerConnection:
 # How long to wait for an offer after sending a "requestoffer" before sending
 # another request for the same session id. In seconds.
 OFFER_REQUEST_COOLDOWN = 10
+# How many times to request an offer from a speaker whose transcriber ended.
+OFFER_REQUEST_TRIES = 5
 
 
 class SpreedClient:
@@ -95,6 +97,8 @@ class SpreedClient:
 		self._close_task: asyncio.Task | None = None
 		self._deferred_close_task: asyncio.Task | None = None
 		self._reconnect_task: asyncio.Task | None = None
+		# releases started from a done callback, kept here until they finish
+		self._release_tasks: set[asyncio.Task] = set()
 		self.translate_queue_input: asyncio.Queue = asyncio.Queue()
 		self.translate_queue_output: asyncio.Queue = asyncio.Queue()
 		self.translated_text_sender: asyncio.Task | None = None
@@ -627,6 +631,9 @@ class SpreedClient:
 			self._reconnect_task.cancel()
 		self._reconnect_task = None
 
+		for task in self._release_tasks:
+			task.cancel()
+
 		app_closing = self._monitor.cancelled() if self._monitor else False
 
 		with suppress(Exception):
@@ -1128,6 +1135,43 @@ class SpreedClient:
 			with suppress(Exception):
 				await pc.close()
 
+	async def restart_speaker(self, session_id: str, pc: RTCPeerConnection) -> None:
+		"""Release a speaker whose transcriber ended by itself, and ask for a new offer.
+
+		The speaker is still in the call, and no participant update follows that
+		would request the offer, so without the request the speaker stays without
+		transcripts until the call ends. The signaling server can leave a request
+		unanswered: in a test it did so for one sent right after the old
+		connection closed. So request again until an offer arrives.
+		"""
+		release = asyncio.create_task(self.release_peer_connection(session_id, pc))
+		try:
+			await asyncio.shield(release)
+		except asyncio.CancelledError:
+			# close() cancelled this task, and it no longer has the connection in
+			# peer_connections. Finish the release: a cancelled pc.close() leaves the
+			# transports open, and a second pc.close() waits for the first forever.
+			await release
+			raise
+		for _ in range(OFFER_REQUEST_TRIES):
+			async with self.peer_connection_lock:
+				if self.defunct.is_set() or session_id in self.peer_connections:
+					return
+				requested = time.monotonic()
+				self._offer_requested[session_id] = requested
+			await self.send_offer_request(session_id)
+			await asyncio.sleep(OFFER_REQUEST_COOLDOWN)
+			async with self.peer_connection_lock:
+				# An offer and the speaker's leave remove the entry, and the monitor replaces it.
+				if self._offer_requested.get(session_id) != requested:
+					return
+		LOGGER.error("No offer from %s after %d requests, the speaker stays without transcripts",
+			session_id, OFFER_REQUEST_TRIES, extra={
+				"session_id": session_id,
+				"room_token": self.room_token,
+				"tag": "offer",
+			})
+
 	async def handle_offer(self, message):  # noqa: C901
 		"""Handle incoming offer messages."""
 		spkr_sid = message["message"]["sender"]["sessionid"]
@@ -1243,6 +1287,35 @@ class SpreedClient:
 								name=f"close-{weakself().room_token}",
 							)
 						return
+
+					transcriber = weakself().transcribers[spkr_sid]
+
+					def on_audio_task_done(task: asyncio.Task):
+						# The audio task ends by itself when the ASR connection is lost. The peer
+						# connection is still open then, and aiortc keeps decoding the speaker's audio
+						# into the queue of the track, which nothing reads any more: about 1.2 MB each
+						# second for each speaker, until the speaker leaves. A cancelled task was shut
+						# down by a release or by close(), and a newer track replaces the transcriber.
+						# A task that ended with its track needs no restart: the connection closed,
+						# and its state change handler releases it.
+						if (
+							task.cancelled()
+							or transcriber.stream_ended
+							or not weakself()
+							or weakself().transcribers.get(spkr_sid) is not transcriber
+						):
+							return
+						LOGGER.warning("Transcriber for %s ended, restarting its peer connection", spkr_sid, extra={
+							"session_id": spkr_sid,
+							"room_token": weakself().room_token,
+							"tag": "transcriber",
+						})
+						release = asyncio.create_task(weakself().restart_speaker(spkr_sid, pc))
+						weakself()._release_tasks.add(release)
+						release.add_done_callback(weakself()._release_tasks.discard)
+
+					if transcriber.audio_task is not None:
+						transcriber.audio_task.add_done_callback(on_audio_task_done)
 
 					LOGGER.info(
 						"Started transcriber for %s in %s",
