@@ -343,9 +343,16 @@ The call has three users, each with the user name as the password:
 | User | Joins with | Does |
 |---|---|---|
 | `user-starter` | headless Chromium (`tests/integration/start_call.py`) | starts the call in the Talk web UI |
-| `user-speaker` | `tests/integration/talk_participant.py speaker` | publishes a speech recording in a loop through the SFU |
-| `user-listener` | `tests/integration/talk_participant.py listener` | enables live transcription and counts the transcript messages on its signaling connection |
+| `user-speaker` | `tests/integration/talk_participant.py speaker --video` | publishes a speech recording in a loop and a moving video test pattern through the SFU |
+| `user-listener` | `tests/integration/talk_participant.py listener --stay` | enables live transcription, counts the transcript messages on its signaling connection and stays in the call until the workflow stops it |
 
-The test passes when the listener receives 10 transcripts attributed to `user-speaker`, at least one of them final and one matching the spoken words. After each join, `tests/integration/check_call.sh` checks the call with `occ talk:monitor:room`, `talk:monitor:calls` and `talk:active-calls` and fails early if a participant is missing. `tests/integration/bg.sh` keeps the participants running across the workflow steps and fails the wait as soon as one of them exits.
+The transcription check passes when the listener receives 10 transcripts attributed to `user-speaker`, at least one of them final and one matching the spoken words. The whole test passes when, in addition, both memory checks below pass, the transcripts resume after the ASR server restart, and the listener leaves the call with exit code 0. After each join, `tests/integration/check_call.sh` checks the call with `occ talk:monitor:room`, `talk:monitor:calls` and `talk:active-calls` and fails early if a participant is missing. `tests/integration/bg.sh` keeps the participants running across the workflow steps and fails a wait as soon as one of them exits.
+
+Two checks go beyond "transcripts arrive" and catch memory leaks in the app process `main.py`. Both use `tests/integration/check_memory.sh`, which samples the RSS of `main.py` with `docker top` every 5 s for 90 s and fails when it grows by more than 50 MiB or when the process restarts.
+
+- Video. The cameras of `user-starter` and `user-speaker` are on during the first memory check. An app that accepts the video tracks decodes every frame into a queue that nothing reads. Unfixed, the app grew by about 16 MiB per second for each camera, from 131 MiB to 2144 MiB in about 60 s with two cameras.
+- ASR server restart. The workflow kills the ASR server process in the container, supervisord restarts it, and the listener must receive 10 more transcripts. Then the second memory check runs. An app that keeps the speaker's connection open after its ASR websocket closed decodes that speaker's audio into a queue that nothing reads, and the speaker gets no more transcripts for the rest of the call. Unfixed, the app grew by 1.15 MiB per second for each speaker, from 146 MiB to 775 MiB in under 5 minutes with two speakers.
+
+The fixed app grew from 141.6 MiB to 142.0 MiB over an 8 minute call with two cameras and stayed at 141.8 MiB after its ASR connections were cut. All of these numbers come from a local 4-core host and not from a CI runner.
 
 The two Python participants authenticate with an app password. With the login password, every request logs the user in again, and Talk ends the room session of a user who logs out, so the participant would drop out of the conversation right after joining it.

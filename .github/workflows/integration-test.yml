@@ -259,7 +259,11 @@ jobs:
 
       - name: Start the live_transcription container
         run: |
+          # The memory limit makes a leak fail the test and not the runner: the kernel ends the
+          # process, and the checks below see the restart or the missing transcripts. The
+          # container uses about 1.2 GiB, of which the ASR server is 1.0 GiB.
           docker run -d --name live_transcription --network host --env-file "$LT_ENV_FILE" \
+            --memory 4g --memory-swap 4g \
             -v "$MODELS_DIR:/nc_app_live_transcription_data" \
             ghcr.io/nextcloud-releases/live_transcription:integration-test
           timeout 120 bash -c 'until curl -fsS "http://127.0.0.1:$APP_PORT/heartbeat"; do sleep 2; done' \
@@ -293,29 +297,66 @@ jobs:
               --user user-starter --password user-starter --screenshot "$BG_DIR/starter.png"
           live_transcription/tests/integration/check_call.sh "$TOKEN" 1
 
-      - name: Join the call as user-speaker, looping speech
+      - name: Join the call as user-speaker, looping speech with the camera on
         run: |
           curl -fsSL -o "$BG_DIR/speech.wav" \
             https://raw.githubusercontent.com/ggml-org/whisper.cpp/4979e04f5dcaccb36057e059bbaed8a2f5288315/samples/jfk.wav
+          # --video publishes a test pattern, so the app receives a second camera besides Chromium's fake one
           live_transcription/tests/integration/bg.sh start speaker 90 -- \
             python3 live_transcription/tests/integration/talk_participant.py speaker --url "$NC_URL" --token "$TOKEN" \
-              --user user-speaker --password user-speaker --audio "$BG_DIR/speech.wav"
+              --user user-speaker --password user-speaker --audio "$BG_DIR/speech.wav" --video
           live_transcription/tests/integration/check_call.sh "$TOKEN" 2
 
       - name: Join the call as user-listener and wait for the transcripts
         run: |
+          # --stay keeps the listener in the call after it passed, for the checks below
           live_transcription/tests/integration/bg.sh start listener 90 -- \
             python3 live_transcription/tests/integration/talk_participant.py listener --url "$NC_URL" --token "$TOKEN" \
               --user user-listener --password user-listener --speaker-user user-speaker \
-              --min-transcripts 10 --min-finals 1 --timeout 300
+              --min-transcripts 10 --min-finals 1 --timeout 300 --stay
           live_transcription/tests/integration/check_call.sh "$TOKEN" 3
-          live_transcription/tests/integration/bg.sh wait listener 330 starter speaker
+          live_transcription/tests/integration/bg.sh expect listener 330 '^TRANSCRIBED$' 1 starter speaker
+
+      - name: Check that the app's memory stays flat while two cameras are on
+        # The cameras of user-starter (Chromium's fake camera) and user-speaker (--video) are on.
+        # An app that receives video it never reads grows by 16 MiB per second for each camera,
+        # while the fixed app grew by less than 1 MiB in 8 minutes. 50 MiB in 90 s separates both.
+        # The log goes to $BG_DIR for the artifact, without a pipe that would hide the exit code.
+        run: |
+          code=0
+          live_transcription/tests/integration/check_memory.sh live_transcription 90 50 \
+            > "$BG_DIR/memory-video.log" 2>&1 || code=$?
+          cat "$BG_DIR/memory-video.log"
+          exit "$code"
+
+      - name: Restart the ASR server during the call and wait for the transcripts to resume
+        # supervisord restarts the ASR server. The app must reconnect each speaker, or that speaker
+        # gets no more transcripts for the rest of the call.
+        run: |
+          before=$(live_transcription/tests/integration/bg.sh count listener '^TRANSCRIPT$')
+          echo "$before transcripts before the restart"
+          docker exec live_transcription pkill -f /ex_app/lib/asr_server.py
+          live_transcription/tests/integration/bg.sh expect listener 180 '^TRANSCRIPT$' "$((before + 10))" starter speaker
+
+      - name: Check that the app's memory stays flat after the ASR server restart
+        # An app that keeps decoding the audio of a speaker whose ASR connection closed grows by
+        # 1.15 MiB per second for each speaker, thus above 50 MiB in 90 s.
+        run: |
+          code=0
+          live_transcription/tests/integration/check_memory.sh live_transcription 90 50 \
+            > "$BG_DIR/memory-asr-restart.log" 2>&1 || code=$?
+          cat "$BG_DIR/memory-asr-restart.log"
+          exit "$code"
 
       - name: Leave the call
         if: always()
         run: |
           live_transcription/tests/integration/bg.sh stop listener speaker starter
           ./occ talk:monitor:calls || true
+
+      - name: Check that the listener left the call cleanly
+        # shows the listener log and fails unless the listener exited with code 0 after the stop
+        run: live_transcription/tests/integration/bg.sh wait listener 10
 
       - name: Show logs
         if: always()

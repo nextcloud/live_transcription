@@ -8,6 +8,11 @@
 #   bg.sh start NAME TIMEOUT -- CMD...   start CMD, wait until it prints "READY"
 #   bg.sh wait NAME TIMEOUT [WATCH...]   wait for NAME to exit and return its exit code,
 #                                        failing early when a WATCH process dies first
+#   bg.sh count NAME REGEX               print the number of lines of NAME.log that match
+#                                        the extended REGEX
+#   bg.sh expect NAME TIMEOUT REGEX COUNT [WATCH...]
+#                                        wait until COUNT lines of NAME.log match REGEX,
+#                                        failing early when NAME or a WATCH process ends
 #   bg.sh stop NAME...                   send SIGTERM and wait for a clean exit
 #
 # Each process leaves NAME.log, NAME.pid and, once it ended, NAME.exit in $BG_DIR.
@@ -80,6 +85,37 @@ cmd_wait() {
 	[ "$code" -eq 0 ] || die "$name failed with exit code $code"
 }
 
+cmd_count() {
+	[ -f "$BG_DIR/$1.log" ] || die "$BG_DIR/$1.log does not exist"
+	# grep exits 1 when no line matches, which is a count of 0 here, and 2 on a bad regex
+	grep -cE -- "$2" "$BG_DIR/$1.log" || [ $? -eq 1 ]
+}
+
+cmd_expect() {
+	local name=$1 timeout=$2 regex=$3 count=$4
+	shift 4
+	local waited=0 found watch
+	while :; do
+		found=$(cmd_count "$name" "$regex")
+		if [ "$found" -ge "$count" ]; then
+			echo "$name.log has $found lines that match '$regex' after ${waited}s"
+			return 0
+		fi
+		for watch in "$name" "$@"; do
+			if ! running "$watch"; then
+				show_log "$watch"
+				die "$watch ended while waiting for $count lines that match '$regex' in $name.log, $found found"
+			fi
+		done
+		if [ "$waited" -ge "$timeout" ]; then
+			show_log "$name"
+			die "$found of $count lines that match '$regex' in $name.log after ${timeout}s"
+		fi
+		sleep 2
+		waited=$((waited + 2))
+	done
+}
+
 cmd_stop() {
 	local name waited
 	for name in "$@"; do
@@ -107,6 +143,8 @@ shift || true
 case "$action" in
 	start) cmd_start "$@" ;;
 	wait) cmd_wait "$@" ;;
+	count) cmd_count "$@" ;;
+	expect) cmd_expect "$@" ;;
 	stop) cmd_stop "$@" ;;
-	*) die "usage: $0 start|wait|stop ..." ;;
+	*) die "usage: $0 start|wait|count|expect|stop ..." ;;
 esac
