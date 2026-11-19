@@ -1247,7 +1247,7 @@ class SpreedClient:
 
 		pc.addTransceiver("audio", direction="recvonly")
 		@pc.on("track")
-		async def on_track(track):
+		async def on_track(track):  # noqa: C901
 			if track.kind == "audio":
 				LOGGER.debug("Receiving %s track from %s", track.kind, spkr_sid, extra={
 					"session_id": spkr_sid,
@@ -1264,9 +1264,10 @@ class SpreedClient:
 					return
 
 				stream = AudioStream(track)
+				language = weakself().room_lang_id
 				transcriber = Transcriber(
 					spkr_sid,
-					weakself().room_lang_id,
+					language,
 					weakself().transcript_queue,
 					weakself().should_translate,
 					weakself().translate_queue_input,
@@ -1348,6 +1349,20 @@ class SpreedClient:
 					await transcriber.shutdown()
 					return
 
+				# A language switch that ran while this transcriber connected did not see it.
+				if weakself() and weakself().room_lang_id != language:
+					try:
+						await transcriber.set_language(weakself().room_lang_id)
+					except Exception:
+						LOGGER.warning("Could not switch the new transcriber of %s to the room language",
+							spkr_sid, extra={
+								"session_id": spkr_sid,
+								"room_lang_id": weakself().room_lang_id,
+								"room_token": weakself().room_token,
+								"tag": "transcriber",
+							},
+						)
+
 				LOGGER.info(
 					"Started transcriber for %s in %s",
 					spkr_sid,
@@ -1424,9 +1439,17 @@ class SpreedClient:
 	async def set_language(self, lang_id: str):
 		excs = []
 		async with self.transcriber_lock:
+			# Set first, so that a transcriber created from now on, such as the replacement
+			# of one that lost its ASR connection, starts in the new language.
+			self.room_lang_id = lang_id
 			transcribers = list(self.transcribers.values())
 		# one failing transcriber must not keep the others in the old language
 		for transcriber in transcribers:
+			# Without an ASR connection there is nothing to switch: its audio task ended, and
+			# its replacement reads room_lang_id. Counting it as a failure would report an
+			# error for a switch that reached every speaker.
+			if not transcriber.connected:
+				continue
 			try:
 				await transcriber.set_language(lang_id)
 			except Exception as e:
@@ -1444,7 +1467,6 @@ class SpreedClient:
 			)
 		if len(excs) == 1:
 			raise ASRException(f"Failed to set language for one transcriber: {excs[0]}", retcode=500)
-		self.room_lang_id = lang_id
 
 	async def transcipt_queue_consumer(self):
 		"""Consume transcripts from the queue and send them to the server."""

@@ -139,6 +139,11 @@ class Transcriber:
 		self.audio_task = asyncio.create_task(self.__run_audio_xfer(stream))
 		self.audio_task.add_done_callback(partial(self.__done_cb, stream))
 
+	@property
+	def connected(self) -> bool:
+		"""Whether the transcriber has a connection to the ASR server, and so can switch language."""
+		return self.__asrcon is not None
+
 	async def shutdown(self):
 		if self.audio_task and not self.audio_task.done():
 			LOGGER.debug("Cancelling audio task for session_id: %s", self.__session_id, extra={
