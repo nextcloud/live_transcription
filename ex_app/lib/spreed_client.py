@@ -1256,7 +1256,7 @@ class SpreedClient:
 				})
 
 				if not weakself():
-					LOGGER.error("SpreedClient instance is gone, cannot handle track", extra={
+					LOGGER.warning("SpreedClient instance is gone, cannot handle track", extra={
 						"session_id": spkr_sid,
 						"room_token": None,
 						"tag": "track",
@@ -1264,89 +1264,101 @@ class SpreedClient:
 					return
 
 				stream = AudioStream(track)
-				async with weakself().transcriber_lock:
-					# The speaker can be released, or close() can run, while this handler waits for
-					# the lock. A transcriber for a connection that is no longer the speaker's would
-					# never be shut down.
-					entry = weakself().peer_connections.get(spkr_sid)
-					if entry is None or entry.pc is not pc:
-						LOGGER.debug("Track of a released connection, not transcribing it", extra={
-							"session_id": spkr_sid,
-							"room_token": weakself().room_token,
-							"tag": "track",
-						})
-						return
-					# A renegotiated track replaces the speaker's transcriber. Stop the old one,
-					# or its audio task and ASR connection keep running.
-					if (previous := weakself().transcribers.get(spkr_sid)) is not None:
-						await previous.shutdown()
-					weakself().transcribers[spkr_sid] = Transcriber(
-						spkr_sid,
-						weakself().room_lang_id,
-						weakself().transcript_queue,
-						weakself().should_translate,
-						weakself().translate_queue_input,
-					)
-
-					try:
-						await weakself().transcribers[spkr_sid].connect()
-						await weakself().transcribers[spkr_sid].start(stream=stream)
-					except Exception:
-						LOGGER.exception("Error in connection and start of the ASR server. Cannot continue further.",
-							extra={
-								"server_url": asr_server_url(),
-								"session_id": spkr_sid,
-								"room_token": weakself().room_token,
-								"tag": "asr",
-							},
-						)
-						if not weakself()._close_task:
-							weakself()._close_task = asyncio.create_task(
-								weakself().close(),
-								name=f"close-{weakself().room_token}",
-							)
-						return
-
-					transcriber = weakself().transcribers[spkr_sid]
-
-					def on_audio_task_done(task: asyncio.Task):
-						# The audio task ends by itself when the ASR connection is lost. The peer
-						# connection is still open then, and aiortc keeps decoding the speaker's audio
-						# into the queue of the track, which nothing reads any more: about 1.2 MB each
-						# second for each speaker, until the speaker leaves. A cancelled task was shut
-						# down by a release or by close(), and a newer track replaces the transcriber.
-						# A task that ended with its track needs no restart: the connection closed,
-						# and its state change handler releases it.
-						if (
-							task.cancelled()
-							or transcriber.stream_ended
-							or not weakself()
-							or weakself().transcribers.get(spkr_sid) is not transcriber
-						):
-							return
-						LOGGER.warning("Transcriber for %s ended, restarting its peer connection", spkr_sid, extra={
-							"session_id": spkr_sid,
-							"room_token": weakself().room_token,
-							"tag": "transcriber",
-						})
-						release = asyncio.create_task(weakself().restart_speaker(spkr_sid, pc))
-						weakself()._release_tasks.add(release)
-						release.add_done_callback(weakself()._release_tasks.discard)
-
-					if transcriber.audio_task is not None:
-						transcriber.audio_task.add_done_callback(on_audio_task_done)
-
-					LOGGER.info(
-						"Started transcriber for %s in %s",
-						spkr_sid,
-						LANGUAGE_MAP.get(weakself().room_lang_id).name,
+				transcriber = Transcriber(
+					spkr_sid,
+					weakself().room_lang_id,
+					weakself().transcript_queue,
+					weakself().should_translate,
+					weakself().translate_queue_input,
+				)
+				# Connect without transcriber_lock: connect() waits up to ASR_CONNECT_TIMEOUT for
+				# an ASR server that restarts, and the releases of other speakers, which the
+				# signaling monitor awaits, need the lock.
+				try:
+					await transcriber.connect()
+				except Exception:
+					LOGGER.exception("Error in connection and start of the ASR server. Cannot continue further.",
 						extra={
+							"server_url": asr_server_url(),
 							"session_id": spkr_sid,
-							"room_lang_id": weakself().room_lang_id,
-							"room_token": weakself().room_token,
-							"tag": "transcriber",
+							"room_token": weakself().room_token if weakself() else None,
+							"tag": "asr",
 						},
 					)
+					if weakself() and not weakself()._close_task:
+						weakself()._close_task = asyncio.create_task(
+							weakself().close(),
+							name=f"close-{weakself().room_token}",
+						)
+					return
+
+				def on_audio_task_done(task: asyncio.Task):
+					# The audio task ends by itself when the ASR connection is lost. The peer
+					# connection is still open then, and aiortc keeps decoding the speaker's audio
+					# into the queue of the track, which nothing reads any more: about 1.2 MB each
+					# second for each speaker, until the speaker leaves. A cancelled task was shut
+					# down by a release or by close(), and a newer track replaces the transcriber.
+					# A task that ended with its track needs no restart: the connection closed,
+					# and its state change handler releases it.
+					if (
+						task.cancelled()
+						or transcriber.stream_ended
+						or not weakself()
+						or weakself().defunct.is_set()
+						or weakself().transcribers.get(spkr_sid) is not transcriber
+					):
+						return
+					LOGGER.warning("Transcriber for %s ended, restarting its peer connection", spkr_sid, extra={
+						"session_id": spkr_sid,
+						"room_token": weakself().room_token,
+						"tag": "transcriber",
+					})
+					release = asyncio.create_task(weakself().restart_speaker(spkr_sid, pc))
+					weakself()._release_tasks.add(release)
+					release.add_done_callback(weakself()._release_tasks.discard)
+
+				is_current_pc = False
+				if weakself():
+					async with weakself().peer_connection_lock:
+						entry = weakself().peer_connections.get(spkr_sid)
+
+					async with weakself().transcriber_lock:
+						# Register only for the speaker's current peer connection. The speaker can be
+						# released, or close() can run, while this transcriber connects, and a
+						# transcriber of a peer connection that is no longer the speaker's would never be
+						# shut down. A release removes the entry before it takes this lock, so either
+						# it finds this transcriber here, or this check fails.
+						is_current_pc = entry is not None and entry.pc is pc and is_live(pc)
+						if is_current_pc:
+							# A renegotiated track replaces the speaker's transcriber. Stop the old one,
+							# or its audio task and ASR connection keep running.
+							if (previous := weakself().transcribers.get(spkr_sid)) is not None:
+								await previous.shutdown()
+							weakself().transcribers[spkr_sid] = transcriber
+							await transcriber.start(stream=stream)
+							if transcriber.audio_task is not None:
+								transcriber.audio_task.add_done_callback(on_audio_task_done)
+
+				if not is_current_pc:
+					LOGGER.debug("Track of a released connection, not transcribing it", extra={
+						"session_id": spkr_sid,
+						"room_token": weakself().room_token if weakself() else None,
+						"tag": "track",
+					})
+					await transcriber.shutdown()
+					return
+
+				LOGGER.info(
+					"Started transcriber for %s in %s",
+					spkr_sid,
+					LANGUAGE_MAP.get(weakself().room_lang_id).name,
+					extra={
+						"session_id": spkr_sid,
+						"room_lang_id": weakself().room_lang_id,
+						"room_token": weakself().room_token,
+						"tag": "transcriber",
+					},
+				)
 
 		async with self.peer_connection_lock:
 			self.peer_connections[spkr_sid] = PeerConnection(session_id=spkr_sid, pc=pc)

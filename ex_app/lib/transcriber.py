@@ -146,6 +146,14 @@ class Transcriber:
 				"tag": "asr",
 			})
 			self.audio_task.cancel()
+		elif self.audio_task is None:
+			# WS connected but the audio task to receive and transcribe the stream was never started
+			# close the WS connection here since the audio task will not
+			async with self.__asrcon_lock:
+				if self.__asrcon:
+					with suppress(Exception):
+						await self.__asrcon.close()
+					self.__asrcon = None
 		self.audio_task = None
 
 	def __done_cb(self, stream: AudioStream, future: asyncio.Future):
