@@ -62,6 +62,15 @@ class PeerConnection:
 	pc: RTCPeerConnection
 
 
+def is_live(pc: RTCPeerConnection) -> bool:
+	"""Whether pc can still carry audio: aiortc does not leave "failed" or "closed".
+
+	A "failed" connection still holds its receivers, so code that frees one checks
+	for "closed" only.
+	"""
+	return pc.connectionState not in ("failed", "closed")
+
+
 # How long to wait for an offer after sending a "requestoffer" before sending
 # another request for the same session id. In seconds.
 OFFER_REQUEST_COOLDOWN = 10
@@ -996,8 +1005,7 @@ class SpreedClient:
 						async with self.peer_connection_lock:
 							if (
 								user_desc["sessionId"] in self.peer_connections
-								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "closed"
-								and self.peer_connections[user_desc["sessionId"]].pc.connectionState != "failed"
+								and is_live(self.peer_connections[user_desc["sessionId"]].pc)
 							):
 								LOGGER.info("Peer connection for user already exists, skipping offer request", extra={
 									"user_desc": user_desc,
@@ -1181,11 +1189,7 @@ class SpreedClient:
 		spkr_sid = message["message"]["sender"]["sessionid"]
 		async with self.peer_connection_lock:
 			self._offer_requested.pop(spkr_sid, None)
-			if (
-				spkr_sid in self.peer_connections
-				and self.peer_connections[spkr_sid].pc.connectionState != "closed"
-				and self.peer_connections[spkr_sid].pc.connectionState != "failed"
-			):
+			if spkr_sid in self.peer_connections and is_live(self.peer_connections[spkr_sid].pc):
 				LOGGER.debug("Peer connection for user already exists, skipping offer request", extra={
 					"session_id": spkr_sid,
 					"room_token": self.room_token,
@@ -1230,7 +1234,7 @@ class SpreedClient:
 				})
 				return
 
-			if pc.connectionState in ("failed", "closed"):
+			if not is_live(pc):
 				# log "closed" as INFO
 				log = LOGGER.warning if pc.connectionState == "failed" else LOGGER.info
 				log("Peer connection state for '%s' is '%s'", spkr_sid, pc.connectionState, extra={
