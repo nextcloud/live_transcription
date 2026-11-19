@@ -1337,17 +1337,27 @@ class SpreedClient:
 		async with self.peer_connection_lock:
 			self.peer_connections[spkr_sid] = PeerConnection(session_id=spkr_sid, pc=pc)
 
-		await pc.setRemoteDescription(
-			RTCSessionDescription(type="offer", sdp=message["message"]["data"]["payload"]["sdp"])
-		)
+		try:
+			await pc.setRemoteDescription(
+				RTCSessionDescription(type="offer", sdp=message["message"]["data"]["payload"]["sdp"])
+			)
+			answer = await pc.createAnswer()
+			await pc.setLocalDescription(answer)
+			await self.send_offer_answer(
+				message["message"]["data"]["from"],
+				message["message"]["data"]["sid"],
+				answer.sdp,
+			)
+		except Exception:
+			# release the peer connection so the next offer is not considered a duplicate
+			LOGGER.exception("Negotiation with %s failed, releasing its peer connection", spkr_sid, extra={
+				"session_id": spkr_sid,
+				"room_token": self.room_token,
+				"tag": "offer",
+			})
+			await self.release_peer_connection(spkr_sid, pc)
+			return
 
-		answer = await pc.createAnswer()
-		await pc.setLocalDescription(answer)
-		await self.send_offer_answer(
-			message["message"]["data"]["from"],
-			message["message"]["data"]["sid"],
-			answer.sdp,
-		)
 		LOGGER.debug("Sent answer for offer from %s", spkr_sid, extra={
 			"session_id": spkr_sid,
 			"answer": answer,
