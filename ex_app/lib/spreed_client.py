@@ -631,8 +631,13 @@ class SpreedClient:
 			self._reconnect_task.cancel()
 		self._reconnect_task = None
 
-		for task in self._release_tasks:
+		# A cancelled restart still finishes the release of its connection, which is
+		# no longer in peer_connections. Wait for it, so that close() returns with
+		# every connection closed.
+		release_tasks = list(self._release_tasks)
+		for task in release_tasks:
 			task.cancel()
+		await asyncio.gather(*release_tasks, return_exceptions=True)
 
 		app_closing = self._monitor.cancelled() if self._monitor else False
 
