@@ -663,28 +663,27 @@ class SpreedClient:
 		with suppress(Exception):
 			await self.send_bye()
 
+		peer_connections: list[PeerConnection] = []
 		with suppress(Exception):
-			LOGGER.debug("Shutting down all transcribers", extra={
-				"room_token": self.room_token,
-				"tag": "transcriber",
-			})
-			async with self.transcriber_lock:
-				transcribers_snap = list(self.transcribers.values())
-
-			coros = [t.shutdown() for t in transcribers_snap]
-			await asyncio.gather(*coros, return_exceptions=True)
-
-			async with self.transcriber_lock:
-				self.transcribers.clear()
-
-		with suppress(Exception):
-			# Take the entries out first: each close() fires the state change
-			# handler, which removes its entry from the same dict.
 			async with self.peer_connection_lock:
 				peer_connections = list(self.peer_connections.values())
 				self.peer_connections.clear()
 				self._offer_requested.clear()
 
+		with suppress(Exception):
+			LOGGER.debug("Shutting down all transcribers", extra={
+				"room_token": self.room_token,
+				"tag": "transcriber",
+			})
+			# Copy and clear in one step, so that every transcriber taken out is shut down.
+			async with self.transcriber_lock:
+				transcribers_snap = list(self.transcribers.values())
+				self.transcribers.clear()
+
+			coros = [t.shutdown() for t in transcribers_snap]
+			await asyncio.gather(*coros, return_exceptions=True)
+
+		with suppress(Exception):
 			# a "failed" connection still holds its receivers until it is closed
 			to_close_coros = []
 			for pc in peer_connections:
