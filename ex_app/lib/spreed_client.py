@@ -1262,6 +1262,17 @@ class SpreedClient:
 
 				stream = AudioStream(track)
 				async with weakself().transcriber_lock:
+					# The speaker can be released, or close() can run, while this handler waits for
+					# the lock. A transcriber for a connection that is no longer the speaker's would
+					# never be shut down.
+					entry = weakself().peer_connections.get(spkr_sid)
+					if entry is None or entry.pc is not pc:
+						LOGGER.debug("Track of a released connection, not transcribing it", extra={
+							"session_id": spkr_sid,
+							"room_token": weakself().room_token,
+							"tag": "track",
+						})
+						return
 					# A renegotiated track replaces the speaker's transcriber. Stop the old one,
 					# or its audio task and ASR connection keep running.
 					if (previous := weakself().transcribers.get(spkr_sid)) is not None:
