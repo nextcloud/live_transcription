@@ -663,8 +663,7 @@ class SpreedClient:
 				transcribers_snap = list(self.transcribers.values())
 
 			coros = [t.shutdown() for t in transcribers_snap]
-			with suppress(Exception):
-				await asyncio.gather(*coros, return_exceptions=True)
+			await asyncio.gather(*coros, return_exceptions=True)
 
 			async with self.transcriber_lock:
 				self.transcribers.clear()
