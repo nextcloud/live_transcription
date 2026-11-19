@@ -14,7 +14,13 @@ from urllib.parse import urlparse
 import numpy as np
 from aiortc.mediastreams import MediaStreamError
 from audio_stream import AudioStream
-from constants import ASR_CONNECT_TIMEOUT, MAX_AUDIO_FRAMES, MAX_CONNECT_TRIES, MIN_TRANSCRIPT_SEND_INTERVAL
+from constants import (
+	ASR_CONNECT_RETRY_INTERVAL,
+	ASR_CONNECT_TIMEOUT,
+	MAX_AUDIO_FRAMES,
+	MAX_CONNECT_TRIES,
+	MIN_TRANSCRIPT_SEND_INTERVAL,
+)
 from livetypes import ASRException, StreamEndedException, Transcript, TranslateInputOutput
 from models import LANGUAGE_MAP
 from utils import asr_server_url, get_ssl_context
@@ -49,17 +55,28 @@ class Transcriber:
 
 	async def connect(self):
 		ssl_ctx = get_ssl_context(self.__server_url)
+		deadline = perf_counter() + ASR_CONNECT_TIMEOUT
 		async with self.__asrcon_lock:
-			self.__asrcon: ClientConnection | None = await connect(  # type: ignore[annotation-unchecked]
-				self.__server_url,
-				**({
-					"server_hostname": urlparse(self.__server_url).hostname,
-					"ssl": ssl_ctx,
-				} if ssl_ctx else {}),
-				open_timeout=ASR_CONNECT_TIMEOUT,
-				# PCM compresses only to 0.76 of its size, not worth the CPU cost on both ends
-				compression=None,
-			)
+			while True:
+				try:
+					self.__asrcon: ClientConnection | None = await connect(  # type: ignore[annotation-unchecked]
+						self.__server_url,
+						**({
+							"server_hostname": urlparse(self.__server_url).hostname,
+							"ssl": ssl_ctx,
+						} if ssl_ctx else {}),
+						open_timeout=max(1.0, deadline - perf_counter()),
+						# PCM compresses only to 0.76 of its size, not worth the CPU cost on both ends
+						compression=None,
+					)
+					break
+				except OSError:
+					# The ASR server opens its port only after it loaded the model, so it refuses
+					# connections while it restarts: 3 s with the model in the page cache. A caller
+					# that gets this error ends transcription for the whole call.
+					if perf_counter() + ASR_CONNECT_RETRY_INTERVAL >= deadline:
+						raise
+					await asyncio.sleep(ASR_CONNECT_RETRY_INTERVAL)
 			await self.__asrcon.send(
 				json.dumps({
 					"config": {

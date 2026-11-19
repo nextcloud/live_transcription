@@ -11,9 +11,10 @@ MAX_AUDIO_FRAMES = 16
 MIN_TRANSCRIPT_SEND_INTERVAL = 0.3  # min seconds to wait before sending a partial transcript again
 HPB_SHUTDOWN_TIMEOUT = 30  # seconds to wait for the ws connectino to shut down gracefully
 CALL_LEAVE_TIMEOUT = 60  # seconds to wait before leaving the call if there are no targets
-# wait ASR_CONNECT_TIMEOUT seconds for the ASR server handshake to complete,
-# this includes the model load time in the ASR server
+# wait ASR_CONNECT_TIMEOUT seconds for the ASR server to accept the connection and complete
+# the handshake, this includes the model load time in the ASR server
 ASR_CONNECT_TIMEOUT = 60
+ASR_CONNECT_RETRY_INTERVAL = 1  # seconds between connection attempts while the ASR server refuses them
 HPB_PING_TIMEOUT = 120  # seconds to wait for a ping response from HPB server
 OCP_TASK_PROC_SCHED_RETRIES = 3
 OCP_TASK_TIMEOUT = 30  # seconds to wait for a translation task to complete
