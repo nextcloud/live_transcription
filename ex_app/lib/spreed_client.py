@@ -102,6 +102,8 @@ class SpreedClient:
 		self._transcript_sender: asyncio.Task | None = None
 		self.transcribers: dict[str, Transcriber] = {}
 		self.transcriber_lock = asyncio.Lock()
+		# kept set even after defunct is set
+		self.closing = asyncio.Event()
 		self.defunct = asyncio.Event()
 		self._close_task: asyncio.Task | None = None
 		self._deferred_close_task: asyncio.Task | None = None
@@ -288,7 +290,7 @@ class SpreedClient:
 					"tag": "connection",
 				})
 			finally:
-				self.defunct.set()
+				self.closing.set()
 				self._deferred_close_task = None
 				self._monitor = None
 				self.resumeid = None
@@ -383,6 +385,7 @@ class SpreedClient:
 					self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.FULL_RECONNECT))
 				return SigConnectResult.RETRY
 
+		self.closing.clear()
 		self.defunct.clear()
 		self._monitor = asyncio.create_task(self.signalling_monitor(), name=f"signalling_monitor-{self.room_token}")
 
@@ -434,7 +437,9 @@ class SpreedClient:
 				"send_message": message,
 				"tag": "send_message",
 			})
-			if not self._reconnect_task or self._reconnect_task.done():
+			# A send that fails while closing, such as the bye of close(), must not
+			# reconnect a client that goes away.
+			if not self.closing.is_set() and (not self._reconnect_task or self._reconnect_task.done()):
 				self._reconnect_task = asyncio.create_task(self.connect(reconnect=ReconnectMethod.SHORT_RESUME))
 			return
 		except Exception as e:
@@ -623,6 +628,8 @@ class SpreedClient:
 				"tag": "client",
 			})
 			return
+
+		self.closing.set()
 
 		if self._deferred_close_task and not self._deferred_close_task.done():
 			LOGGER.debug("Cancelling deferred close task", extra={
@@ -884,7 +891,7 @@ class SpreedClient:
 					"room_token": self.room_token,
 					"tag": "monitor",
 				})
-				if not self._reconnect_task or self._reconnect_task.done():
+				if not self.closing.is_set() and (not self._reconnect_task or self._reconnect_task.done()):
 					self._reconnect_task = asyncio.create_task(
 						self.connect(reconnect=ReconnectMethod.SHORT_RESUME),
 						name=f"close-{self.room_token}"
@@ -1093,8 +1100,8 @@ class SpreedClient:
 		})
 		await asyncio.sleep(CALL_LEAVE_TIMEOUT)
 
-		if self.defunct.is_set():
-			LOGGER.debug("SpreedClient is already defunct, clearing deferred close task and returning", extra={
+		if self.closing.is_set():
+			LOGGER.debug("SpreedClient is already closing, clearing deferred close task and returning", extra={
 				"room_token": self.room_token,
 				"tag": "maybe_leave_call",
 			})
@@ -1166,7 +1173,7 @@ class SpreedClient:
 			raise
 		for _ in range(OFFER_REQUEST_TRIES):
 			async with self.peer_connection_lock:
-				if self.defunct.is_set() or session_id in self.peer_connections:
+				if self.closing.is_set() or session_id in self.peer_connections:
 					return
 				requested = time.monotonic()
 				self._offer_requested[session_id] = requested
@@ -1300,12 +1307,17 @@ class SpreedClient:
 					# down by a release or by close(), and a newer track replaces the transcriber.
 					# A task that ended with its track needs no restart: the connection closed,
 					# and its state change handler releases it.
+					# Nor does one whose connection is being released or closed: a release, and
+					# close(), take the entry out of peer_connections before they shut down the
+					# transcriber, and close() sets closing before anything else.
 					if (
 						task.cancelled()
 						or transcriber.stream_ended
 						or not weakself()
-						or weakself().defunct.is_set()
+						or weakself().closing.is_set()
 						or weakself().transcribers.get(spkr_sid) is not transcriber
+						or (entry := weakself().peer_connections.get(spkr_sid)) is None
+						or entry.pc is not pc
 					):
 						return
 					LOGGER.warning("Transcriber for %s ended, restarting its peer connection", spkr_sid, extra={
