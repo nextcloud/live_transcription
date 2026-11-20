@@ -319,8 +319,9 @@ jobs:
 
       - name: Check that the app's memory stays flat while two cameras are on
         # The cameras of user-starter (Chromium's fake camera) and user-speaker (--video) are on.
-        # An app that receives video it never reads grows by 16 MiB per second for each camera,
-        # while the fixed app grew by less than 1 MiB in 8 minutes. 50 MiB in 90 s separates both.
+        # An app that receives video it never reads grows by 16 MiB per second for each camera.
+        # The check measures the whole container, so the ASR server counts as well.
+        # 50 MiB in 90 s separates a leak from the fixed app.
         # The log goes to $BG_DIR for the artifact, without a pipe that would hide the exit code.
         run: |
           code=0
