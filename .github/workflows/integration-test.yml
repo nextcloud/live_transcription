@@ -90,10 +90,10 @@ jobs:
         options: --health-cmd pg_isready --health-interval 5s --health-timeout 2s --health-retries 5
 
     steps:
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          df -h /
+      - name: Show free disk space
+        # No cleanup: deleting the preinstalled SDKs took 2 minutes, and the runner has enough room
+        # without it. The images, models and checkouts of this job need a few GB.
+        run: df -h /
 
       - name: Checkout server
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
