@@ -27,7 +27,8 @@ class TranscribeRequest(BaseModel):
 	roomToken: str
 	ncSessionId: str # Nextcloud session ID, not the HPB session ID
 	enable: bool = True
-	langId: str = "en"
+	# the room language; an id the model has no prompt for means automatic detection
+	langId: str = "detect_language"
 	# the user's language, when set, translate the transcript to this language
 	translationTargetLangId: str | None = None
 
@@ -113,7 +114,7 @@ class SpreedRateLimitedException(SpreedClientException):
 	"""Exception raised when the Spreed Client is rate limited by the HPB server."""
 
 
-class VoskException(Exception):
+class ASRException(Exception):
 	retcode: int
 
 	def __init__(self, message: str, retcode: int = 500):

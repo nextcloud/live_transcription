@@ -73,10 +73,7 @@ jobs:
           tags: |
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:latest
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:${{ fromJson(steps.appinfo.outputs.result).version }}
-          build-args: |
-            HAVE_CUDA=0
-            KALDI_MKL=1
-            RT_IMAGE=ubuntu:22.04
+          target: runtime-cpu
           no-cache: true
 
       - name: Build and push the CUDA image
@@ -90,8 +87,5 @@ jobs:
           tags: |
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:latest-cuda
             ghcr.io/nextcloud-releases/${{ env.APP_ID }}:${{ fromJson(steps.appinfo.outputs.result).version }}-cuda
-          build-args: |
-            HAVE_CUDA=1
-            KALDI_MKL=0
-            RT_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04
+          target: runtime-cuda
           no-cache: true

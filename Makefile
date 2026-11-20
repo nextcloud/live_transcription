@@ -33,8 +33,8 @@ help:
 .PHONY: build-push
 build-push:
   # docker login ghcr.io
-	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --tag ghcr.io/nextcloud-releases/live_transcription:latest --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION) --build-arg HAVE_CUDA=0 --build-arg KALDI_MKL=1 --build-arg RT_IMAGE=ubuntu:22.04 .
-	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --tag ghcr.io/nextcloud-releases/live_transcription:latest-cuda --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION)-cuda --build-arg HAVE_CUDA=1 --build-arg KALDI_MKL=0 --build-arg RT_IMAGE=nvidia/cuda:12.4.1-devel-ubuntu22.04 .
+	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64,linux/arm64 --target runtime-cpu --tag ghcr.io/nextcloud-releases/live_transcription:latest --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION) .
+	DOCKER_BUILDKIT=1 docker buildx build --push --platform linux/amd64 --target runtime-cuda --tag ghcr.io/nextcloud-releases/live_transcription:latest-cuda --tag ghcr.io/nextcloud-releases/live_transcription:$(APP_VERSION)-cuda .
 
 .PHONY: run30
 run29:

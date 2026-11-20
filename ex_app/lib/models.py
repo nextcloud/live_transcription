@@ -5,34 +5,110 @@
 
 from livetypes import LanguageMetadata, LanguageModel
 
-MODELS_LIST = {
-	"ar": "vosk-model-ar-mgb2-0.4",
-	"ar_TN": "vosk-model-small-ar-tn-0.1-linto",
-	"br": "vosk-model-br-0.8",
-	"ca": "vosk-model-small-ca-0.4",
-	"cs": "vosk-model-small-cs-0.4-rhasspy",
-	"de": "vosk-model-small-de-0.15",
-	"en": "vosk-model-en-us-0.22",
-	"eo": "vosk-model-small-eo-0.42",
-	"es": "vosk-model-small-es-0.42",
-	"fa": "vosk-model-small-fa-0.42",
-	"fr": "vosk-model-small-fr-0.22",
-	"hi": "vosk-model-small-hi-0.22",
-	"it": "vosk-model-small-it-0.22",
-	"ja": "vosk-model-small-ja-0.22",
-	"kk": "vosk-model-small-kz-0.15",
-	"ko": "vosk-model-small-ko-0.22",
-	"nl": "vosk-model-small-nl-0.22",
-	"pl": "vosk-model-small-pl-0.22",
-	"pt": "vosk-model-small-pt-0.3",
-	"ru": "vosk-model-small-ru-0.22",
-	"te": "vosk-model-small-te-0.42",
-	"tg": "vosk-model-small-tg-0.22",
-	"tr": "vosk-model-small-tr-0.3",
-	"uk": "vosk-model-small-uk-v3-nano",
-	"uz": "vosk-model-small-uz-0.22",
-	"vi": "vosk-model-small-vn-0.4",
-	"zh": "vosk-model-small-cn-0.22",
+# Hugging Face repo with the sherpa-onnx export of nvidia/nemotron-3.5-asr-streaming-0.6b.
+MODEL_REPO = "csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8-2026-06-11"
+MODEL_REVISION = "424ce58898995b713f84341f2e1492f9207a26aa"
+MODEL_DIR_NAME = "sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8"
+
+# Files of each model export, by sherpa-onnx role, in the order of preference.
+# The ASR server loads the first export that has all its files.
+MODEL_FILES_PATTERNS: dict[str, dict[str, str]] = {
+	"int8": {
+		"tokens": "tokens.txt",
+		"encoder": "encoder.int8.onnx",
+		"decoder": "decoder.int8.onnx",
+		"joiner": "joiner.int8.onnx",
+	},
+	"fp32": {
+		"tokens": "tokens.txt",
+		"encoder": "encoder.onnx",
+		"encoder_data": "encoder.data",
+		"decoder": "decoder.onnx",
+		"joiner": "joiner.onnx",
+	},
+}
+
+# Silero VAD v6.2.3, used to keep silent participants off the decoder: the 16 kHz
+# only export, 1.3 MB, MIT licensed. The URL pins the commit of the v6.2.3 tag,
+# because a tag can be moved.
+#
+# It replaces the v4 file sherpa-onnx publishes. Silero's own benchmark puts v6
+# well ahead on noise without speech, which is what a muted-in-a-busy-room
+# participant sends, and as this server's gate it decoded 85.4 % of the chunks
+# of speech with pauses where v4 decoded 91.5 %, without dropping a word.
+#
+# The file name is unchanged. The new file has a different size, so the
+# downloader replaces an existing v4 file instead of keeping it.
+VAD_MODEL_URL = (
+	"https://raw.githubusercontent.com/snakers4/silero-vad/"
+	"5cd7945676eb32225748052e2e6a0580e4686a08/src/silero_vad/data/silero_vad_16k_op15.onnx"
+)
+VAD_MODEL_NAME = "silero_vad.onnx"
+
+# TODO: Talk still uses English as the default. A room without a language starts
+# its call without a langId and gets DETECT_LANGUAGE, but Talk's set-language
+# call and call view send "en", and its room settings show the empty choice as
+# "Default language (English)". Changes in spreed are necessary for that
+# (lib/Service/LiveTranscriptionService.php, src/components/CallView/BottomBar.vue,
+# src/components/ConversationSettings/LiveTranscriptionSettings.vue).
+DETECT_LANGUAGE = "detect_language"
+
+# Language id to the prompt that the nemotron model receives.
+#
+# These are all 40 locales that NVIDIA lists for the model: 19
+# transcription-ready, 13 broad-coverage and 8 adaptation-ready. NVIDIA says
+# that the adaptation-ready locales (el, he, lt, lv, mt, nn, sl, th) need
+# fine-tuning for full transcription, so expect a lower accuracy for them.
+#
+# The values are full locales, because the model's prompt table
+# (metadata_props["prompt_dictionary"] in encoder.onnx) has no bare "ja", "vi"
+# or "zh", and it maps a bare "es" to es-US while the app means es-ES.
+#
+# The four languages that the model knows in two regions (English, Spanish,
+# French and Portuguese) also get a regional id in Nextcloud's ll_CC form
+# (en_GB, es_US, fr_CA and pt_BR). The bare id keeps its previous region.
+LANGUAGE_PROMPTS = {
+	DETECT_LANGUAGE: "auto",  # sherpa expects "auto", whereas "detect_language" is conventional in NC
+	"ar": "ar-AR",
+	"bg": "bg-BG",
+	"cs": "cs-CZ",
+	"da": "da-DK",
+	"de": "de-DE",
+	"el": "el-GR",
+	"en": "en-US",
+	"en_GB": "en-GB",
+	"es": "es-ES",
+	"es_US": "es-US",
+	"et": "et-EE",
+	"fi": "fi-FI",
+	"fr": "fr-FR",
+	"fr_CA": "fr-CA",
+	"he": "he-IL",
+	"hi": "hi-IN",
+	"hr": "hr-HR",
+	"hu": "hu-HU",
+	"it": "it-IT",
+	"ja": "ja-JP",
+	"ko": "ko-KR",
+	"lt": "lt-LT",
+	"lv": "lv-LV",
+	"mt": "mt-MT",
+	"nl": "nl-NL",
+	"nn": "nn-NO",
+	"no": "nb-NO",
+	"pl": "pl-PL",
+	"pt": "pt-PT",
+	"pt_BR": "pt-BR",
+	"ro": "ro-RO",
+	"ru": "ru-RU",
+	"sk": "sk-SK",
+	"sl": "sl-SI",
+	"sv": "sv-SE",
+	"th": "th-TH",
+	"tr": "tr-TR",
+	"uk": "uk-UA",
+	"vi": "vi-VN",
+	"zh": "zh-CN",
 }
 
 
@@ -137,9 +213,11 @@ LANGUAGE_MAP = {
 	"el": LanguageModel(name="Greek"),
 	"emp": LanguageModel(name="N. Emberá"),
 	"en": LanguageModel(name="English"),
+	"en_GB": LanguageModel(name="English (United Kingdom)"),
 	"enq": LanguageModel(name="Enga"),
 	"eo": LanguageModel(name="Esperanto"),
 	"es": LanguageModel(name="Español"),
+	"es_US": LanguageModel(name="Español (Estados Unidos)"),
 	"et": LanguageModel(name="Estonian"),
 	"eu": LanguageModel(name="Basque"),
 	"fa": LanguageModel(name="فارسی", metadata=LanguageMetadata(rtl=True)),
@@ -152,6 +230,7 @@ LANGUAGE_MAP = {
 	"fo": LanguageModel(name="Faroese"),
 	"fon": LanguageModel(name="Fon"),
 	"fr": LanguageModel(name="Français"),
+	"fr_CA": LanguageModel(name="Français (Canada)"),
 	"frp": LanguageModel(name="Arpitan"),
 	"fy": LanguageModel(name="W. Frisian"),
 	"ga": LanguageModel(name="Irish"),
@@ -306,6 +385,7 @@ LANGUAGE_MAP = {
 	"nij": LanguageModel(name="Ngaju"),
 	"niq": LanguageModel(name="Nandi"),
 	"nl": LanguageModel(name="Nederlands"),
+	"nn": LanguageModel(name="Norwegian Nynorsk"),
 	"nnb": LanguageModel(name="Nande"),
 	"no": LanguageModel(name="Norwegian"),
 	"noa": LanguageModel(name="Woun Meu"),
@@ -337,6 +417,7 @@ LANGUAGE_MAP = {
 	"prk": LanguageModel(name="Parauk"),
 	"ps": LanguageModel(name="Pashto"),
 	"pt": LanguageModel(name="Português"),
+	"pt_BR": LanguageModel(name="Português (Brasil)"),
 	"qu": LanguageModel(name="Quechua"),
 	"qub": LanguageModel(name="Huallaga Huánuco Quechua"),
 	"qug": LanguageModel(name="Chimborazo Highland Quichua"),
@@ -455,5 +536,11 @@ LANGUAGE_MAP = {
 	"zun": LanguageModel(name="Zuni"),
 }
 
+LANGUAGE_MAP[DETECT_LANGUAGE] = LanguageModel(name="Automatic detection")
 
-VOSK_SUPPORTED_LANGUAGE_MAP = {lang_id: LANGUAGE_MAP[lang_id] for lang_id in MODELS_LIST}
+SUPPORTED_LANGUAGE_MAP = {lang_id: LANGUAGE_MAP[lang_id] for lang_id in LANGUAGE_PROMPTS}
+
+
+def supported_language(lang_id: str | None) -> str:
+	"""lang_id when the model has a prompt for it, otherwise DETECT_LANGUAGE."""
+	return lang_id if lang_id in LANGUAGE_PROMPTS else DETECT_LANGUAGE

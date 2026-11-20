@@ -5,13 +5,16 @@
 
 MSG_RECEIVE_TIMEOUT = 10  # seconds
 MAX_CONNECT_TRIES = 5  # maximum number of connection attempts
-MAX_AUDIO_FRAMES = 20  # maximum number of audio frames to collect before sending to Vosk
+# Number of 20 ms audio frames to collect before each send to the ASR server.
+# 16 frames are 320 ms, the model's chunk size, so each send gives exactly one decode.
+MAX_AUDIO_FRAMES = 16
 MIN_TRANSCRIPT_SEND_INTERVAL = 0.3  # min seconds to wait before sending a partial transcript again
 HPB_SHUTDOWN_TIMEOUT = 30  # seconds to wait for the ws connectino to shut down gracefully
 CALL_LEAVE_TIMEOUT = 60  # seconds to wait before leaving the call if there are no targets
-# wait VOSK_CONNECT_TIMEOUT seconds for the Vosk server handshake to complete,
-# this includes the language load time in the Vosk server
-VOSK_CONNECT_TIMEOUT = 60
+# wait ASR_CONNECT_TIMEOUT seconds for the ASR server to accept the connection and complete
+# the handshake, this includes the model load time in the ASR server
+ASR_CONNECT_TIMEOUT = 60
+ASR_CONNECT_RETRY_INTERVAL = 1  # seconds between connection attempts while the ASR server refuses them
 HPB_PING_TIMEOUT = 120  # seconds to wait for a ping response from HPB server
 OCP_TASK_PROC_SCHED_RETRIES = 3
 OCP_TASK_TIMEOUT = 30  # seconds to wait for a translation task to complete
