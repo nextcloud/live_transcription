@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.rtcconfiguration import RTCConfiguration, RTCIceServer
-from aiortc.sdp import candidate_from_sdp
+from aiortc.sdp import SessionDescription, candidate_from_sdp
 from audio_stream import AudioStream
 from constants import (
 	CALL_LEAVE_TIMEOUT,
@@ -48,9 +48,8 @@ from models import LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp
 from transcriber import Transcriber
 from utils import asr_server_url, get_ssl_context, hmac_sha256, sanitize_websocket_url
-from websockets import ClientConnection
+from websockets import ClientConnection, connect
 from websockets import State as WsState
-from websockets import connect
 from websockets.exceptions import WebSocketException
 
 LOGGER = logging.getLogger("lt.spreed_client")
@@ -984,15 +983,15 @@ class SpreedClient:
 
 					# user connected, keep a map of Nextcloud session IDs to HPB session IDs
 					async with self.target_lock:
-						# not sure why a KeyError is hit when the monitor task is cancelled,
-						# adding a guard to prevent error logs
+						# only in-call changes carry the Nextcloud session ID, the update sent when
+						# a participant is modified (name, type, permissions) does not
 						if "nextcloudSessionId" in user_desc:
 							# todo: get the userid for the session ids and maintain a map in "sid_translation_lang_map"
 							# todo: use the ownerId of the room for the OCP translations, using talk api, or something.
 							self.nc_sid_map[user_desc["nextcloudSessionId"]] = user_desc["sessionId"]
 
 					# if this is one of the deferred targets, add it to the targets
-					if (user_desc["nextcloudSessionId"] in self._nc_sid_wait_stash):
+					if (user_desc.get("nextcloudSessionId") in self._nc_sid_wait_stash):
 						LOGGER.debug("Adding one of the deferred targets to the target dict", extra={
 							"nc_session_id": user_desc["nextcloudSessionId"],
 							"session_id": user_desc["sessionId"],
@@ -1203,6 +1202,35 @@ class SpreedClient:
 				})
 				return
 
+		try:
+			media_desc = SessionDescription.parse(
+				message["message"]["data"]["payload"]["sdp"]
+			).media
+		except Exception as e:
+			LOGGER.warning("Could not parse offer for media lines, skipping", exc_info=e, extra={
+				"session_id": spkr_sid,
+				"room_type": message["message"]["data"].get("roomType"),
+				"room_token": self.room_token,
+				"tag": "offer",
+			})
+			return
+
+		offer_media_kinds = [
+			media.kind
+			for media in media_desc
+			if media.kind in ("audio", "video")
+		]
+
+		if "audio" not in offer_media_kinds:
+			LOGGER.debug("Offer carries no audio, ignoring it", extra={
+				"session_id": spkr_sid,
+				"room_type": message["message"]["data"].get("roomType"),
+				"media_kinds": offer_media_kinds,
+				"room_token": self.room_token,
+				"tag": "offer",
+			})
+			return
+
 		ice_servers = []
 		for stunserver in self.hpb_settings.stunservers:
 			ice_servers.append(
@@ -1251,7 +1279,13 @@ class SpreedClient:
 				})
 				await weakself().release_peer_connection(spkr_sid, pc)
 
-		pc.addTransceiver("audio", direction="recvonly")
+		# explicitly decline video track so aiortc does not try downloading and decoding it
+		for media in offer_media_kinds:
+			if media == "audio":
+				pc.addTransceiver("audio", direction="recvonly")
+			else:
+				pc.addTransceiver(media, direction="inactive")
+
 		@pc.on("track")
 		async def on_track(track):  # noqa: C901
 			if track.kind == "audio":

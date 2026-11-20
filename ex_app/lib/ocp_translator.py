@@ -21,7 +21,10 @@ from utils import timed_cache_async
 LOGGER = logging.getLogger("lt.ocp_translator")
 TRANSLATE_TASK_TYPE = "core:text2text:translate"
 AUTO_DETECT_ORIGIN_LANG_ID = "detect_language"
-OCP_ORIGIN_LANG_ID: str | None = None
+# origin languages the provider does not offer but can auto-detect; tracked per
+# language so one room's fallback does not follow another's
+OCP_AUTO_DETECT_ORIGIN_LANGS: set[str] = set()
+OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK = asyncio.Lock()
 
 
 class Task(BaseModel):
@@ -100,6 +103,17 @@ class OCPTranslator(ATranslator):
 		nc = AsyncNextcloudApp()
 
 		sched_tries = OCP_TASK_PROC_SCHED_RETRIES
+
+		async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+			auto_detect = (
+				self.origin_language == DETECT_LANGUAGE
+				or self.origin_language in OCP_AUTO_DETECT_ORIGIN_LANGS
+			)
+		origin_language = (
+			AUTO_DETECT_ORIGIN_LANG_ID if auto_detect
+			else await OCPTranslator.provider_origin(self.origin_language)
+		)
+
 		while True:
 			try:
 				sched_tries -= 1
@@ -115,10 +129,7 @@ class OCPTranslator(ATranslator):
 						"customId": f"lt-{self.room_token}-{self.origin_language}-{self.target_language}",
 						"input": {
 							"input": message,
-							"origin_language": (
-								AUTO_DETECT_ORIGIN_LANG_ID if self.origin_language == DETECT_LANGUAGE
-								else OCP_ORIGIN_LANG_ID or await OCPTranslator.provider_origin(self.origin_language)
-							),
+							"origin_language": origin_language,
 							"target_language": self.target_language,
 						},
 					},
@@ -138,7 +149,8 @@ class OCPTranslator(ATranslator):
 					LOGGER.warning(
 						"Rate limited during translation task scheduling, waiting 30s before retrying",
 						extra={
-							"origin_language": self.origin_language,
+							"room_language": self.origin_language,
+							"origin_language": origin_language,
 							"target_language": self.target_language,
 							"tries_left": sched_tries,
 							"tag": "translate",
@@ -154,7 +166,8 @@ class OCPTranslator(ATranslator):
 					) from e
 
 				LOGGER.error("NextcloudException during translation task scheduling", exc_info=e, extra={
-					"origin_language": self.origin_language,
+					"room_language": self.origin_language,
+					"origin_language": origin_language,
 					"target_language": self.target_language,
 					"tries_left": sched_tries,
 					"nc_exc_reason": str(e.reason),
@@ -168,7 +181,8 @@ class OCPTranslator(ATranslator):
 		try:
 			task = TaskResponse.model_validate(response).task
 			LOGGER.debug("Initial translation task schedule response", extra={
-				"origin_language": self.origin_language,
+				"room_language": self.origin_language,
+				"origin_language": origin_language,
 				"target_language": self.target_language,
 				"task": task,
 				"tag": "translate",
@@ -197,7 +211,8 @@ class OCPTranslator(ATranslator):
 						LOGGER.warning(
 							"Rate limited during translation task polling, waiting 10s before retrying",
 							extra={
-								"origin_language": self.origin_language,
+								"room_language": self.origin_language,
+								"origin_language": origin_language,
 								"target_language": self.target_language,
 								"tries_so_far": i,
 								"waiting_time": now_waiting_for,
@@ -210,7 +225,8 @@ class OCPTranslator(ATranslator):
 					raise TranslateException("Failed to poll TaskProcessing translation task") from e
 				except niquests.RequestException as e:
 					LOGGER.warning("Ignored error during task polling", exc_info=e, extra={
-						"origin_language": self.origin_language,
+						"room_language": self.origin_language,
+						"origin_language": origin_language,
 						"target_language": self.target_language,
 						"tries_so_far": i,
 						"waiting_time": now_waiting_for,
@@ -222,7 +238,8 @@ class OCPTranslator(ATranslator):
 
 				task = TaskResponse.model_validate(response).task
 				LOGGER.debug(f"Translation task poll ({i * 5}s) response", extra={  # noqa: G004
-					"origin_language": self.origin_language,
+					"room_language": self.origin_language,
+					"origin_language": origin_language,
 					"target_language": self.target_language,
 					"tries_so_far": i,
 					"waiting_time": now_waiting_for,
@@ -236,7 +253,8 @@ class OCPTranslator(ATranslator):
 			raise TranslateException(
 				f"TaskProcessing translation task failed with status {task.status} "
 				f"after waiting {now_waiting_for} seconds "
-				f"for origin_language={self.origin_language} and target_language={self.target_language}",
+				f"for origin_language={origin_language} and target_language={self.target_language} "
+				f"in a room with language {self.origin_language}",
 			)
 
 		if not isinstance(task.output, dict) or "output" not in task.output:
@@ -310,9 +328,9 @@ class OCPTranslator(ATranslator):
 	@staticmethod
 	@timed_cache_async()
 	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
-		"""Also sets self.__ocp_origin_lang_id to AUTO_DETECT_ORIGIN_LANG_ID if the origin language is not supported but auto-detect is."""  # noqa: E501
-
-		global OCP_ORIGIN_LANG_ID
+		"""Also records the origin language in OCP_AUTO_DETECT_ORIGIN_LANGS, if the
+		provider does not support it but does support auto-detection.
+		"""
 
 		task_types = await OCPTranslator.__get_task_types()
 		provider_origin = await OCPTranslator.provider_origin(origin_language)
@@ -333,7 +351,15 @@ class OCPTranslator(ATranslator):
 					origin_language,
 				)
 				return False
-			OCP_ORIGIN_LANG_ID = AUTO_DETECT_ORIGIN_LANG_ID
+
+			# origin_language is not available but detect_language is
+			async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+				OCP_AUTO_DETECT_ORIGIN_LANGS.add(origin_language)
+		else:
+			# origin_language is available, prefer that over detect_language
+			# can happen when the provider changes
+			async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
+				OCP_AUTO_DETECT_ORIGIN_LANGS.discard(origin_language)
 
 		if not any(
 			tlang.value == target_language
