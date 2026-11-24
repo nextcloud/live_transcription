@@ -356,3 +356,73 @@ Two checks go beyond "transcripts arrive" and catch memory leaks in the app proc
 The fixed app grew from 141.6 MiB to 142.0 MiB over an 8 minute call with two cameras and stayed at 141.8 MiB after its ASR connections were cut. All of these numbers come from a local 4-core host and not from a CI runner.
 
 The two Python participants authenticate with an app password. With the login password, every request logs the user in again, and Talk ends the room session of a user who logs out, so the participant would drop out of the conversation right after joining it.
+
+### Stress test
+
+`.github/workflows/stress-test.yml` runs one Talk call with many participants against the CPU image, on `stable35` with Talk 25 only. The integration test shows that transcripts arrive at all. The stress test shows that they still arrive on time, to every listener and attributed to the right speaker, when the app serves one websocket message per listener for each transcript and participants come and go.
+
+The setup is that of the integration test, with two differences. There is no browser, because a speaker starts the call. Nextcloud and the signaling server listen on all interfaces, and the participants and the app reach both at `10.201.0.1`, the host address of the bridge described below. The app still runs on the host network with `APP_HOST=127.0.0.1`.
+
+The call has 102 users, each with the user name as the password:
+
+| Users | Do |
+|---|---|
+| `stress-speaker-1`, `stress-speaker-2` | publish a speech recording through the SFU and take turns: each turn lasts 20 s, the next speaker starts 5 s before the current turn ends, so both speak for 5 s, and after every second turn nobody speaks for 10 s. Outside its turns a speaker sends silence, like an open microphone. |
+| `stress-listener-001` .. `stress-listener-100` | enable live transcription and record every transcript with its speaker and its arrival time |
+
+`tests/integration/stress_netns.sh up 102` creates a bridge `ltsbr0` with the host address `10.201.0.1/16` and one network namespace for each participant, connected to the bridge with a veth pair. `tests/integration/stress_call.py` forks one process for each participant. Each process enters its own namespace, drops root, and then joins. Thus every participant reaches Nextcloud, the HPB and Janus from its own IP address, and each speaker offers ICE candidates of its own address, like real clients on separate machines. At most 8 participants join or leave at the same time, and the PHP dev server runs 16 workers, so that the requests do not queue behind each other. Janus gathers its ICE candidates on the bridge only (`--ice-enforce-list=ltsbr0`): on the host network it also sees the host end of every veth pair, and with 102 of them libnice aborts when the first speaker publishes.
+
+A listener process is synchronous (`requests` and the synchronous websocket client) and takes about 30 MiB of RSS, 9 MiB of it not shared with the other forks. A speaker also runs aiortc, which needs asyncio, on a thread of its own, and takes about 90 MiB. The 102 processes need about 1 GiB in total.
+
+Each participant drops once at a random point of the call with a probability of 0.15. Half of the drops are clean: the participant leaves the call and the room and closes its websocket. The other half are abrupt: the participant closes its sockets without leaving, and a speaker also stops its peer connection without signaling it. The participant rejoins 2 to 8 s later with a new HPB session, a speaker publishes again and a listener enables transcription again. The random choices derive from the conversation token unless `--seed` sets them, thus the same seed repeats the same drops.
+
+The speaking schedule starts 20 s after all participants joined, so the app has subscribed to the speakers, and then lasts 4 minutes. Each participant writes its events to `<user>.jsonl`, and `stress_call.py` writes the speaking schedule to `schedule.json` and a `summary.json`. The workflow uploads all of them with the logs as an artifact.
+
+The test fails when one of these checks fails:
+
+- `stress_call.py` exits non-zero: a participant process crashed, or a participant failed to join twice.
+- `tests/integration/stress_check.py` reads the records and fails on:
+  - Delivery. A listener got no final transcript, or fewer than 5 transcripts of a speaker, counted over the time the listener was connected.
+  - Fairness. Among the listeners that never dropped, the transcript counts differ by 10 % or more of the highest count.
+  - Timeliness. The first transcript of a turn reaches a connected listener more than 8 s after the turn started, or a transcript of a speaker arrives more than 8 s after its turn ended, which shows a backlog. The report gives the p50 and p95 of the first-transcript latency.
+  - Attribution. While only one speaker speaks, and more than 8 s after the turn of the other one ended, a listener gets a transcript attributed to the silent speaker.
+  - Reconnects. A participant that dropped did not rejoin, a listener that rejoined got no transcript within 8 s of the next turn, or a speaker that rejoined was not transcribed in its next turn.
+- `tests/integration/check_memory.sh` samples the anonymous memory of the app container and fails above 50 MiB of growth, on a kill for lack of memory, or on a restart. It starts 90 s after all participants joined and runs until 10 s before the schedule ends. The app and the ASR server allocate while they transcribe the first turns, and the check would count that warm-up as growth if it started earlier.
+- The app log, `docker logs live_transcription` and `lt.log`, contains `Timeout while sending`, `Error in Transcriber`, `Traceback` or `Cannot continue further`. The workflow prints the matching lines.
+- After the participants left, `occ talk:active-calls` still reports a call after 60 s, or the HPB stats (`/api/v1/stats`) still show a room or a session after 120 s. The app joins the HPB as an internal client without a Nextcloud session, so only the HPB stats show that the app left. The app leaves when the last user leaves, or 60 s after its last transcript receiver left, and the HPB keeps the session of a connection that closed without a `bye` for 30 s.
+
+These limits are a first setting. They passed in a local run on a 4-core host with the workflow's own steps, and no CI runner has run the job yet:
+
+| Check | Local result | Limit |
+|---|---|---|
+| participants | 102 of 102 joined, 17 dropped and rejoined (one of them a speaker) | all |
+| delivery | 573 to 613 transcripts per listener | at least 5 of each speaker |
+| fairness | 613 transcripts for each of the 84 listeners without a drop | gap under 10 % |
+| first transcript of a turn | p50 1.8 s, p95 4.3 s, max 4.3 s | 8 s |
+| transcripts after the end of a turn | none later than the limit | 8 s |
+| memory of the app container | 20.2 MiB in 160 s | 50 MiB |
+
+The memory of the app container grew in three steps of 5 to 7 MiB in the first 85 s of the check and by 0.2 MiB in the last 75 s. Tighten the limits after the first runs show what the runner achieves.
+
+The job runs nightly, on pushes to `master` and `stable*`, on demand (`workflow_dispatch`), and on pull requests that change `ex_app/`, `tests/integration/stress_*`, `Dockerfile`, `requirements.txt`, `supervisord.conf` or the workflow file. It has a timeout of 40 minutes.
+
+To run it locally, set up Postgres, Nextcloud with Talk and AppAPI, the HPB and the app as the workflow does, with `NC_URL=http://10.201.0.1:8080`. Create the namespaces first, because the services use the address of the bridge. The namespaces need root, and `stress_netns.sh` also inserts `iptables` rules that accept traffic from the bridge in `INPUT` and `FORWARD`, which `down` removes again. Nextcloud uses port 8080 and the signaling server port 8081, and both must be free on the host.
+
+```bash
+sudo tests/integration/stress_netns.sh up 102
+# Postgres, the HPB, Nextcloud, the users, the conversation and the app as in the workflow
+mkdir -p call/stress
+curl -fsSL -o call/speech.wav \
+  https://raw.githubusercontent.com/ggml-org/whisper.cpp/4979e04f5dcaccb36057e059bbaed8a2f5288315/samples/jfk.wav
+sudo -E "$(command -v python3)" tests/integration/stress_call.py --url http://10.201.0.1:8080 --token "$TOKEN" \
+  --speakers 2 --listeners 100 --password-prefix '' --audio call/speech.wav --minutes 4 \
+  --turn 20 --overlap 5 --pause 10 --start-delay 20 --drop-probability 0.15 \
+  --uid "$(id -u)" --gid "$(id -g)" --out call/stress > call/stress.log 2>&1 &
+# once stress.log shows READY: the warm-up, then the memory check until the schedule ends
+sleep 90; tests/integration/check_memory.sh live_transcription 160 50
+wait
+python3 tests/integration/stress_check.py call/stress
+sudo tests/integration/stress_netns.sh down
+```
+
+`sudo` replaces `PATH`, thus the command passes the path of the `python3` that has the test dependencies (`aiortc av numpy requests websockets`).
