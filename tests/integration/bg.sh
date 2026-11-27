@@ -43,8 +43,10 @@ cmd_start() {
 	[ "${1:-}" = "--" ] && shift
 	rm -f "$BG_DIR/$name".{log,pid,exit}
 
-	# The wrapper records the exit code, so later steps can tell how the process ended.
-	bash -c '"${@:2}" & echo $! > "$1.pid"; wait $!; echo $? > "$1.exit"' _ "$BG_DIR/$name" "$@" \
+	# The wrapper records the exit code, so later steps can tell how the process ended. It writes
+	# each file under a temporary name and renames it, so a reader never sees it empty.
+	bash -c '"${@:2}" & echo $! > "$1.pid.tmp"; mv "$1.pid.tmp" "$1.pid"
+		wait $!; echo $? > "$1.exit.tmp"; mv "$1.exit.tmp" "$1.exit"' _ "$BG_DIR/$name" "$@" \
 		> "$BG_DIR/$name.log" 2>&1 < /dev/null &
 
 	local waited=0

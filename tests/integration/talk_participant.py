@@ -242,8 +242,13 @@ class Participant:
 		try:
 			async for raw in self.ws:
 				await self.handle(json.loads(raw))
-		except websockets.ConnectionClosed:
+		except websockets.ConnectionClosedOK:
+			# a send in handle() on a connection that closed normally
 			pass
+		except Exception:
+			# the caller only sees that the reader ended, so the cause goes to the log here, also
+			# for ConnectionClosedError: a protocol error or a network failure
+			LOGGER.exception("%s: the signaling reader failed", self.user)
 		finally:
 			self.closed.set()
 
@@ -261,6 +266,7 @@ class Participant:
 		if self.ws:
 			with contextlib.suppress(Exception):
 				await self.send({"type": "bye", "bye": {}})
+			with contextlib.suppress(Exception):
 				await self.ws.close()
 		if self.http.auth:
 			with contextlib.suppress(Exception):

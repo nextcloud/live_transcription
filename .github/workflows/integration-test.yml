@@ -333,10 +333,25 @@ jobs:
       - name: Restart the ASR server during the call and wait for the transcripts to resume
         # supervisord restarts the ASR server. The app must reconnect each speaker, or that speaker
         # gets no more transcripts for the rest of the call.
+        # The ASR server logs "Language set to" once for each connection that the app configures.
+        # Two lines after the restart show that both speakers reconnected, user-starter too, whose
+        # fake microphone plays a tone that gives no transcript. The listener counts the transcripts
+        # only after that, so transcripts that were in flight during the restart do not count.
         run: |
-          before=$(live_transcription/tests/integration/bg.sh count listener '^TRANSCRIPT$')
-          echo "$before transcripts before the restart"
+          configured() { docker logs live_transcription 2>&1 | grep -c 'lt.asr_server: Language set to' || true; }
+          connections=$(configured)
           docker exec live_transcription pkill -f /ex_app/lib/asr_server.py
+          waited=0
+          until [ "$(configured)" -ge "$((connections + 2))" ]; do
+            [ "$waited" -lt 120 ] || {
+              echo "::error::$(($(configured) - connections)) of 2 speakers reconnected to the ASR server in 120s"
+              docker logs --tail 50 live_transcription; exit 1; }
+            sleep 2
+            waited=$((waited + 2))
+          done
+          echo "both speakers reconnected to the ASR server within ${waited}s"
+          before=$(live_transcription/tests/integration/bg.sh count listener '^TRANSCRIPT$')
+          echo "$before transcripts before the reconnect"
           live_transcription/tests/integration/bg.sh expect listener 180 '^TRANSCRIPT$' "$((before + 10))" starter speaker
 
       - name: Check that the app's memory stays flat after the ASR server restart
