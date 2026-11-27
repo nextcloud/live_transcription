@@ -43,6 +43,29 @@ class MetaTranslator:
 		self.translate_queue_output = translate_queue_output
 		self.should_translate = should_translate
 
+	async def set_room_lang_id(self, room_lang_id: str):
+		"""Update the origin language and rebuild the existing translators with it."""
+		if room_lang_id == self.room_lang_id:
+			return
+
+		LOGGER.info("Room language changed, rebuilding translators", extra={
+			"old_room_lang_id": self.room_lang_id,
+			"room_lang_id": room_lang_id,
+			"tag": "translate",
+		})
+		self.room_lang_id = room_lang_id
+
+		async with self.translators_lock:
+			for target_lang_id, translator in self.translators.items():
+				rebuilt = OCPTranslator(room_lang_id, target_lang_id, self.room_token)
+				for nc_session_id in translator.nc_session_ids:
+					rebuilt.add_session_id(nc_session_id)
+				self.translators[target_lang_id] = rebuilt
+
+		# translating into the language that is now spoken in the room is a no-op,
+		# and the caller refuses such a pair when the target language is set
+		await self.__shutdown_translators_for_lang(room_lang_id)
+
 	async def add_translator(self, target_lang_id: str, nc_session_id: str):
 		"""
 		Raises
