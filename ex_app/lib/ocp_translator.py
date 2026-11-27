@@ -13,7 +13,7 @@ import niquests
 from atranslator import ATranslator
 from constants import OCP_TASK_PROC_SCHED_RETRIES
 from livetypes import LanguageModel, SupportedTranslationLanguages, TranslateException, TranslateFatalException
-from models import LANGUAGE_MAP
+from models import DETECT_LANGUAGE, LANGUAGE_MAP
 from nc_py_api import AsyncNextcloudApp, NextcloudException
 from pydantic import BaseModel, ValidationError
 from utils import timed_cache_async
@@ -105,11 +105,14 @@ class OCPTranslator(ATranslator):
 		sched_tries = OCP_TASK_PROC_SCHED_RETRIES
 
 		async with OCP_AUTO_DETECT_ORIGIN_LANGS_LOCK:
-			origin_language = (
-				AUTO_DETECT_ORIGIN_LANG_ID
-				if self.origin_language in OCP_AUTO_DETECT_ORIGIN_LANGS
-				else self.origin_language
+			auto_detect = (
+				self.origin_language == DETECT_LANGUAGE
+				or self.origin_language in OCP_AUTO_DETECT_ORIGIN_LANGS
 			)
+		origin_language = (
+			AUTO_DETECT_ORIGIN_LANG_ID if auto_detect
+			else await OCPTranslator.provider_origin(self.origin_language)
+		)
 
 		while True:
 			try:
@@ -310,15 +313,32 @@ class OCPTranslator(ATranslator):
 
 	@staticmethod
 	@timed_cache_async()
+	async def provider_origin(origin_language: str) -> str:
+		"""The provider's id for a room language, which can be regional, as in pt_BR.
+
+		Use the regional id if the provider lists it, otherwise its bare language.
+		Talk uses the same fallback for target languages.
+		"""
+		task_types = await OCPTranslator.__get_task_types()
+		origins = {o.value for o in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]}
+		if origin_language in origins:
+			return origin_language
+		return origin_language.split("_", 1)[0]
+
+	@staticmethod
+	@timed_cache_async()
 	async def is_language_pair_supported(origin_language: str, target_language: str) -> bool:
 		"""Also records the origin language in OCP_AUTO_DETECT_ORIGIN_LANGS, if the
 		provider does not support it but does support auto-detection.
 		"""
 
 		task_types = await OCPTranslator.__get_task_types()
+		provider_origin = await OCPTranslator.provider_origin(origin_language)
 
-		if not any(
-			olang.value == origin_language
+		# A room with automatic detection has no known origin language, so it can
+		# only be translated with automatic detection.
+		if origin_language == DETECT_LANGUAGE or not any(
+			olang.value == provider_origin
 			for olang in task_types.types[TRANSLATE_TASK_TYPE].inputShapeEnumValues["origin_language"]
 		):
 			if not any(
