@@ -137,7 +137,10 @@ jobs:
       - name: Set up python
         uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
         with:
-          python-version: '3.12'
+          python-version: '3.13'
+          cache-dependency-path: |
+            requirements.txt
+            requirements_dev.txt
 
       - name: Install the test dependencies
         run: |
