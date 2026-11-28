@@ -1,0 +1,479 @@
+# SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+name: Stress test
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - stable*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stress-test-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest-low
+    permissions:
+      contents: read
+      pull-requests: read
+
+    outputs:
+      src: ${{ steps.changes.outputs.src}}
+
+    steps:
+      - uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        id: changes
+        continue-on-error: true
+        with:
+          filters: |
+            src:
+              - 'ex_app/**'
+              - 'tests/integration/stress_*'
+              - 'Dockerfile'
+              - 'requirements.txt'
+              - 'supervisord.conf'
+              - '.github/workflows/stress-test.yml'
+
+  stress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+
+    needs: changes
+    # the paths filter applies to pull requests only, the other triggers always run the test
+    if: github.event_name != 'pull_request' || needs.changes.outputs.src != 'false'
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - server-versions: 'stable35'
+            spreed-major: '25'
+
+    name: Live transcription stress test on ${{ matrix.server-versions }}
+
+    env:
+      # The participants run in network namespaces behind the bridge ltsbr0, see
+      # tests/integration/stress_netns.sh. They reach Nextcloud and the HPB at the host
+      # address of the bridge, and so does the app on the host network.
+      NC_URL: http://10.201.0.1:8080
+      PGSQL_PORT: 4445
+      # the HPB: signaling server on 8081, janus on 8188, both on the host network
+      HPB_URL: http://10.201.0.1:8081
+      HPB_SECRET: 4567
+      # example.env with the overrides for this runner, see "Prepare the app environment"
+      LT_ENV_FILE: ${{ github.workspace }}/live_transcription.env
+      # the app's persistent storage, where /init downloads the models
+      MODELS_DIR: ${{ github.workspace }}/lt_storage
+      BG_DIR: ${{ github.workspace }}/call
+      ROOM_NAME: Live transcription stress test
+      STRESS_SPEAKERS: 2
+      STRESS_LISTENERS: 100
+      STRESS_MINUTES: 10
+      # seconds between READY (all participants joined) and the first speaking window
+      STRESS_START_DELAY: 20
+      # seed of the drops, the recordings of the turns and the network profiles; the run number
+      # varies them from run to run, and a failed run repeats with the same seed
+      STRESS_SEED: run-${{ github.run_id }}
+      # the TURN server for the participants behind the TURN-only firewall, on the bridge
+      TURN_SECRET: stress-turn-secret
+      # The app and the ASR server allocate while they transcribe the first turns, so the
+      # memory check starts this many seconds after READY: the start delay, the first two
+      # turns and the pause (20 + 35 + 10 s), and a margin.
+      STRESS_WARMUP: 90
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        ports:
+          - 4445:5432/tcp
+        env:
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: rootpassword
+          POSTGRES_DB: nextcloud
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 2s --health-retries 5
+
+    steps:
+      - name: Show free disk space
+        run: df -h /
+
+      - name: Checkout server
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: nextcloud/server
+          ref: ${{ matrix.server-versions }}
+          submodules: 'recursive'
+          persist-credentials: false
+
+      - name: Checkout the app
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          path: live_transcription
+          persist-credentials: false
+
+      - name: Checkout app_api
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          repository: nextcloud/app_api
+          ref: ${{ matrix.server-versions }}
+          path: apps/app_api
+          persist-credentials: false
+
+      - name: Download the latest Talk release for the server
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release list -R nextcloud-releases/spreed --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -E '^v${{ matrix.spreed-major }}\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          [ -n "$tag" ] || { echo "::error::No Talk ${{ matrix.spreed-major }} release found"; exit 1; }
+          echo "Talk $tag"
+          gh release download "$tag" -R nextcloud-releases/spreed -p "spreed-$tag.tar.gz" -O - | tar -xz -C apps
+
+      - name: Set up php
+        uses: shivammathur/setup-php@cf4cade2721270509d5b1c766ab3549210a39a2a # v2.33.0
+        with:
+          php-version: '8.3'
+          extensions: mbstring, iconv, fileinfo, intl, pdo_pgsql, pgsql, gd, zip, curl
+          coverage: none
+
+      - name: Set up python
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5
+        with:
+          python-version: '3.13'
+          cache-dependency-path: |
+            requirements.txt
+            requirements_dev.txt
+
+      - name: Install the test dependencies
+        run: pip install aiortc av numpy requests websockets
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3
+
+      - name: Build the live_transcription CPU image
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6
+        with:
+          context: live_transcription
+          push: false
+          load: true
+          platforms: linux/amd64
+          # a local tag, so the image is never pulled from the registry
+          tags: ghcr.io/nextcloud-releases/live_transcription:integration-test
+          target: runtime-cpu
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cache the models
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          # the model repo, its revision and the VAD URL are pinned in models.py
+          path: |
+            ${{ env.MODELS_DIR }}
+            !${{ env.MODELS_DIR }}/logs
+          key: lt-models-${{ hashFiles('live_transcription/ex_app/lib/models.py') }}
+
+      - name: Prepare the persistent storage
+        run: |
+          mkdir -p "$MODELS_DIR/logs"
+          chmod -R a+rwX "$MODELS_DIR"
+          ls -la "$MODELS_DIR"
+
+      - name: Prepare the app environment from example.env
+        run: |
+          cp live_transcription/example.env "$LT_ENV_FILE"
+          set_env() {
+            sed -i "/^$1=/d" "$LT_ENV_FILE"
+            echo "$1=$2" >> "$LT_ENV_FILE"
+          }
+          set_env AA_VERSION "$(sed -n 's|.*<version>\(.*\)</version>.*|\1|p' apps/app_api/appinfo/info.xml | head -1)"
+          set_env APP_VERSION "$(sed -n 's|.*<version>\(.*\)</version>.*|\1|p' live_transcription/appinfo/info.xml | head -1)"
+          # host network: listen on loopback only
+          set_env APP_HOST 127.0.0.1
+          # the mount point of $MODELS_DIR in the container
+          set_env APP_PERSISTENT_STORAGE /nc_app_live_transcription_data
+          set_env NEXTCLOUD_URL "$NC_URL"
+          set_env LT_HPB_URL "${HPB_URL/http/ws}/spreed"
+          cat "$LT_ENV_FILE"
+          # the HPB and the registration below use the same values as the app
+          grep -E '^(APP_ID|APP_SECRET|APP_PORT|APP_VERSION|LT_INTERNAL_SECRET)=' "$LT_ENV_FILE" >> "$GITHUB_ENV"
+
+      - name: Create a network namespace for each participant
+        # The services below are reached at 10.201.0.1, the host address of the bridge, thus
+        # the bridge must exist before they start and before the checks that wait for them.
+        # The seed puts some participants behind a NAT router and some behind a firewall that
+        # only lets TURN through, see stress_netns.sh and NETWORK_PROFILES in stress_call.py.
+        run: |
+          mkdir -p "$BG_DIR"
+          python3 live_transcription/tests/integration/stress_call.py --url "$NC_URL" --token unused \
+            --seed "$STRESS_SEED" --speakers "$STRESS_SPEAKERS" --listeners "$STRESS_LISTENERS" \
+            --write-plan "$BG_DIR/network-plan.txt"
+          # the TURN-only firewall lets through TCP to these ports only: Nextcloud and the HPB
+          sudo STRESS_TCP_PORTS="${NC_URL##*:},${HPB_URL##*:}" \
+            live_transcription/tests/integration/stress_netns.sh up "$((STRESS_SPEAKERS + STRESS_LISTENERS))" \
+            "$BG_DIR/network-plan.txt"
+          ip -br addr show ltsbr0
+
+      - name: Start the TURN server
+        # coturn on the bridge address, with the shared secret of Talk's TURN REST API. The relay
+        # addresses are on the bridge too, where Janus is.
+        run: |
+          docker run -d --name turn --network host coturn/coturn:4.7.0@sha256:a00afb5b4890de4df22bbe70379c6b316685dffee297d53cac1271dcb91fab93 \
+            -n --log-file=stdout --listening-ip=10.201.0.1 --relay-ip=10.201.0.1 --listening-port=3478 \
+            --min-port=49160 --max-port=49660 --use-auth-secret --static-auth-secret="$TURN_SECRET" \
+            --realm=stress.local --no-tls --no-dtls --no-cli --fingerprint \
+            --allowed-peer-ip=10.201.0.0-10.201.255.255
+          timeout 30 bash -c 'until docker logs turn 2>&1 | grep -q "relay 10.201.0.1 initialization done"; do sleep 1; done' \
+            || { docker logs turn; exit 1; }
+
+      - name: Start the HPB (signaling server and Janus)
+        run: |
+          # Janus gathers ICE candidates on the bridge only. On the host network it also sees
+          # the host end of every veth pair, and with 102 of them libnice aborts when the first
+          # publisher connects (assertion other_preference < NICE_CANDIDATE_MAX_LOCAL_ADDRESSES).
+          # The participants and the app reach Janus at 10.201.0.1 on the bridge.
+          docker run -d --name janus --network host \
+            ghcr.io/nextcloud/nextcloud-dev-talk-janus@sha256:03feb5f579ad05a0845dacb1af53aa46a6fc69ce87e37b29f1f0d45144646c5e \
+            janus --full-trickle --ice-enforce-list=ltsbr0
+          # on all interfaces, so the participants in the namespaces reach it at 10.201.0.1
+          docker run -d --name signaling --network host \
+            -e HTTP_LISTEN=0.0.0.0:8081 \
+            -e HASH_KEY=0123456789abcdef0123456789abcdef \
+            -e BLOCK_KEY=fedcba9876543210fedcba9876543210 \
+            -e INTERNAL_SHARED_SECRET_KEY="$LT_INTERNAL_SECRET" \
+            -e BACKENDS_ALLOWALL=true \
+            -e BACKENDS_ALLOWALL_SECRET="$HPB_SECRET" \
+            -e SKIP_VERIFY=true \
+            -e USE_JANUS=1 \
+            -e JANUS_URL=ws://127.0.0.1:8188 \
+            strukturag/nextcloud-spreed-signaling:2.2.0
+          timeout 60 bash -c 'until curl -fsS "$HPB_URL/api/v1/welcome"; do sleep 2; done' \
+            || { docker logs signaling; docker logs janus; exit 1; }
+          echo
+          # the signaling server must have connected to Janus, or no media can flow
+          timeout 60 bash -c 'until docker logs signaling 2>&1 | grep -q "Connected to Janus"; do sleep 2; done' \
+            || { docker logs signaling; docker logs janus; exit 1; }
+
+      - name: Set up Nextcloud
+        run: |
+          mkdir data
+          ./occ maintenance:install --verbose --database=pgsql --database-name=nextcloud --database-host=127.0.0.1 \
+            --database-port="$PGSQL_PORT" --database-user=root --database-pass=rootpassword \
+            --admin-user admin --admin-pass password
+          ./occ config:system:set overwrite.cli.url --value="$NC_URL"
+          ./occ config:system:set trusted_domains 0 --value=localhost:8080
+          ./occ config:system:set trusted_domains 1 --value=10.201.0.1:8080
+          ./occ config:system:set loglevel --value=2 --type=integer
+          # On all interfaces for the participants in the namespaces. Up to 8 participants join
+          # at the same time, and each join takes several requests, thus 16 workers.
+          PHP_CLI_SERVER_WORKERS=16 php -S 0.0.0.0:8080 > php-server.log 2>&1 &
+          timeout 60 bash -c 'until curl -fsS "$NC_URL/status.php"; do sleep 1; done'
+          echo
+
+      - name: Enable Talk and AppAPI
+        run: |
+          ./occ app:enable --force spreed app_api
+          ./occ app:list --enabled | grep -E 'spreed|app_api'
+
+      - name: Configure the HPB in Talk
+        run: |
+          ./occ talk:signaling:add "$HPB_URL" "$HPB_SECRET"
+          # Talk hands both to the clients in the signaling settings, as for real browsers
+          ./occ talk:stun:add 10.201.0.1:3478
+          ./occ talk:turn:add turn 10.201.0.1:3478 udp,tcp --secret "$TURN_SECRET"
+          ./occ talk:signaling:list
+          ./occ talk:stun:list
+          ./occ talk:turn:list
+
+      - name: Add the users
+        run: |
+          for user in $(seq -f 'stress-speaker-%g' 1 "$STRESS_SPEAKERS") \
+            $(seq -f 'stress-listener-%03g' 1 "$STRESS_LISTENERS"); do
+            OC_PASS="$user" ./occ user:add --password-from-env --display-name="$user" "$user" > /dev/null
+          done
+          count=$(./occ user:list --limit 500 --output=json | jq '[keys[] | select(startswith("stress-"))] | length')
+          echo "$count stress users"
+          [ "$count" -eq "$((STRESS_SPEAKERS + STRESS_LISTENERS))" ] \
+            || { echo "::error::Expected $((STRESS_SPEAKERS + STRESS_LISTENERS)) stress users"; exit 1; }
+
+      - name: Create the conversation with the users
+        run: |
+          speakers=() listeners=()
+          for user in $(seq -f 'stress-speaker-%g' 1 "$STRESS_SPEAKERS"); do speakers+=(--user "$user"); done
+          for user in $(seq -f 'stress-listener-%03g' 1 "$STRESS_LISTENERS"); do listeners+=(--user "$user"); done
+          out=$(./occ talk:room:create "$ROOM_NAME" --owner stress-speaker-1 "${speakers[@]}")
+          echo "$out"
+          token=$(sed -n 's/^Room token: //p' <<< "$out")
+          [ -n "$token" ] || { echo "::error::No room token in the output"; exit 1; }
+          echo "TOKEN=$token" >> "$GITHUB_ENV"
+          ./occ talk:room:add "$token" "${listeners[@]}"
+          room=$(./occ talk:monitor:room "$token" --output=json)
+          echo "$room"
+          jq -e --argjson n "$((STRESS_SPEAKERS + STRESS_LISTENERS))" '.attendees >= $n' <<< "$room" > /dev/null \
+            || { echo "::error::The conversation has fewer than $((STRESS_SPEAKERS + STRESS_LISTENERS)) attendees"; exit 1; }
+
+      - name: Start the live_transcription container
+        run: |
+          # The memory limit makes a leak fail the test and not the runner: the kernel ends the
+          # process, and the checks below see the restart or the missing transcripts. The
+          # container uses about 1.2 GiB, of which the ASR server is 1.0 GiB.
+          docker run -d --name live_transcription --network host --env-file "$LT_ENV_FILE" \
+            --memory 4g --memory-swap 4g \
+            -v "$MODELS_DIR:/nc_app_live_transcription_data" \
+            ghcr.io/nextcloud-releases/live_transcription:integration-test
+          timeout 120 bash -c 'until curl -fsS "http://127.0.0.1:$APP_PORT/heartbeat"; do sleep 2; done' \
+            || { docker logs live_transcription; exit 1; }
+          echo
+
+      - name: Register live_transcription
+        # --wait-finish includes /init, which downloads the models into $MODELS_DIR
+        run: |
+          ./occ app_api:daemon:register --net host manual_install "Manual Install" manual-install http localhost "$NC_URL"
+          ./occ app_api:app:register "$APP_ID" manual_install --wait-finish --json-info \
+            "{\"id\":\"$APP_ID\",\"name\":\"Live Transcription\",\"daemon_config_name\":\"manual_install\",\"version\":\"$APP_VERSION\",\"secret\":\"$APP_SECRET\",\"port\":$APP_PORT}"
+          ./occ app_api:app:list
+          du -sh "$MODELS_DIR"/*
+
+      - name: Check that Talk offers live transcription
+        run: |
+          capability=$(curl -fsS -u admin:password -H 'OCS-APIRequest: true' "$NC_URL/ocs/v2.php/cloud/capabilities?format=json" \
+            | jq '.ocs.data.capabilities.spreed.config.call."live-transcription"')
+          echo "live-transcription capability: $capability"
+          [ "$capability" = "true" ] || { echo "::error::Talk does not offer live transcription"; exit 1; }
+          curl -fsS -u stress-listener-001:stress-listener-001 -H 'OCS-APIRequest: true' -H 'Accept: application/json' \
+            "$NC_URL/ocs/v2.php/apps/spreed/api/v1/live-transcription/languages" | jq -c '.ocs.data | keys'
+
+      - name: Check the speech recordings
+        # The turns play the recordings of tests/integration/audio, in English, German, Spanish,
+        # French, Italian, Russian, Ukrainian and Hindi, see audio/REUSE.md. clips.json has the
+        # checksum of each file.
+        run: |
+          mkdir -p "$BG_DIR/stress"
+          cd live_transcription/tests/integration/audio
+          jq -r '.clips[] | "\(.sha256)  \(.file)"' clips.json | sha256sum --check --strict
+
+      - name: Run the call with the speakers and the listeners, with drops and reconnects
+        id: call
+        timeout-minutes: 15
+        # stress_call.py runs in the background and prints READY once all participants joined.
+        # The memory check then covers the call from the end of the warm-up to the end of the
+        # schedule. stress_call.py needs root for setns, and each participant drops to the
+        # runner user. sudo replaces PATH with its secure_path even with -E, thus the python3
+        # of setup-python, which has the test dependencies, is passed by its path.
+        run: |
+          # exits with 1 when calls are in progress
+          ./occ talk:active-calls || { echo "::error::A call runs before the test started one"; exit 1; }
+          # 102 participants join 8 at a time, which takes minutes on a busy runner
+          live_transcription/tests/integration/bg.sh start stress 600 -- \
+            sudo -E "$(command -v python3)" live_transcription/tests/integration/stress_call.py \
+            --url "$NC_URL" --token "$TOKEN" --speakers "$STRESS_SPEAKERS" --listeners "$STRESS_LISTENERS" \
+            --password-prefix '' --minutes "$STRESS_MINUTES" --seed "$STRESS_SEED" \
+            --turn 20 --overlap 5 --pause 10 --start-delay "$STRESS_START_DELAY" --drop-probability 0.15 \
+            --uid "$(id -u)" --gid "$(id -g)" --out "$BG_DIR/stress"
+          sleep "$STRESS_WARMUP"
+          # until 10 s before the schedule ends, when the participants start to leave
+          seconds=$((STRESS_START_DELAY + STRESS_MINUTES * 60 - STRESS_WARMUP - 10))
+          code=0
+          live_transcription/tests/integration/check_memory.sh live_transcription "$seconds" 50 \
+            > "$BG_DIR/memory.log" 2>&1 || code=$?
+          cat "$BG_DIR/memory.log"
+          # the participants leave at the end of the schedule, and a failed participant fails the step
+          live_transcription/tests/integration/bg.sh wait stress 180 || code=$?
+          exit "$code"
+
+      - name: Check the transcripts of every listener
+        if: ${{ !cancelled() && steps.call.outcome != 'skipped' }}
+        run: python3 live_transcription/tests/integration/stress_check.py "$BG_DIR/stress"
+
+      - name: Check the app log for errors
+        if: ${{ !cancelled() && steps.call.outcome != 'skipped' }}
+        run: |
+          docker logs live_transcription > "$BG_DIR/live_transcription-docker.log" 2>&1
+          [ -f "$MODELS_DIR/logs/lt.log" ] || { echo "::error::$MODELS_DIR/logs/lt.log does not exist"; exit 1; }
+          code=0
+          grep -HnE 'Timeout while sending|Error in Transcriber|Traceback|Cannot continue further' \
+            "$BG_DIR/live_transcription-docker.log" "$MODELS_DIR"/logs/lt.log* || code=$?
+          case "$code" in
+            0) echo "::error::The app logged the errors above"; exit 1 ;;
+            1) echo "No errors in the app log" ;;
+            *) echo "::error::grep failed with exit code $code"; exit 1 ;;
+          esac
+
+      - name: Check that the app leaves the call by itself
+        if: ${{ !cancelled() && steps.call.outcome != 'skipped' }}
+        # talk:active-calls counts the Nextcloud sessions only, and the app joins the HPB as an
+        # internal client without one, thus talk:active-calls cannot see the app. The HPB stats
+        # must also show no room and no session. The app leaves when it sees the last user
+        # leave, or CALL_LEAVE_TIMEOUT (60 s, see ex_app/lib/constants.py) after its last
+        # transcript receiver left. The HPB keeps the session of a connection that closed
+        # without a bye for 30 s. Thus the HPB gets 120 s. It serves its stats on 127.0.0.1 only.
+        run: |
+          waited=0
+          # exits with 0 when no call is in progress
+          until ./occ talk:active-calls; do
+            [ "$waited" -lt 60 ] || { echo "::error::The call still runs 60s after the participants left"; exit 1; }
+            sleep 2
+            waited=$((waited + 2))
+          done
+          waited=0
+          until stats=$(curl -fsS http://127.0.0.1:8081/api/v1/stats) && jq -e '.rooms == 0 and .sessions == 0' <<< "$stats" > /dev/null; do
+            if [ "$waited" -ge 120 ]; then
+              echo "HPB stats: $stats"
+              echo "::error::The HPB still has a room or a session 120s after the participants left"
+              exit 1
+            fi
+            sleep 2
+            waited=$((waited + 2))
+          done
+          echo "The HPB has no room and no session after ${waited}s: $stats"
+
+      - name: Show the CPU and memory of the containers
+        if: always()
+        # docker stats shows the state after the call. The cgroup counters cover the whole job.
+        run: |
+          docker stats --no-stream || true
+          for container in live_transcription signaling janus; do
+            pid=$(docker inspect -f '{{.State.Pid}}' "$container" 2>/dev/null) || continue
+            [ "$pid" -gt 0 ] || continue
+            cgroup=/sys/fs/cgroup$(sed -n 's/^0:://p' "/proc/$pid/cgroup") || continue
+            echo "$container: peak memory $(awk '{ printf "%.0f", $1 / 1048576 }' "$cgroup/memory.peak" 2>/dev/null) MiB," \
+              "CPU time $(awk '$1 == "usage_usec" { printf "%.0f", $2 / 1000000 }' "$cgroup/cpu.stat" 2>/dev/null) s"
+          done
+
+      - name: Show logs
+        if: always()
+        run: |
+          echo "::group::memory"; cat "$BG_DIR/memory.log" 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::stress_call.py"; cat "$BG_DIR/stress.log" 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::stress summary"; cat "$BG_DIR/stress/summary.json" 2>/dev/null || true; echo "::endgroup::"
+          for container in live_transcription signaling janus turn; do
+            echo "::group::docker logs $container"; docker logs "$container" 2>&1 | tail -n 500 || true; echo "::endgroup::"
+          done
+          echo "::group::live_transcription lt.log"; tail -n 1000 "$MODELS_DIR/logs/lt.log" 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::nextcloud.log"; tail -n 300 data/nextcloud.log 2>/dev/null || true; echo "::endgroup::"
+          echo "::group::php server"; tail -n 300 php-server.log 2>/dev/null || true; echo "::endgroup::"
+
+      - name: Stop the participants and remove the network namespaces
+        if: always()
+        run: |
+          live_transcription/tests/integration/bg.sh stop stress || true
+          sudo live_transcription/tests/integration/stress_netns.sh down
+
+      - name: Upload logs and the participant records
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: stress-test-${{ matrix.server-versions }}
+          path: |
+            ${{ env.BG_DIR }}/
+            ${{ env.MODELS_DIR }}/logs/
+            ${{ env.LT_ENV_FILE }}
+            data/nextcloud.log
+            php-server.log
+          if-no-files-found: ignore
