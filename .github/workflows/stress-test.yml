@@ -79,6 +79,11 @@ jobs:
       STRESS_MINUTES: 10
       # seconds between READY (all participants joined) and the first speaking window
       STRESS_START_DELAY: 20
+      # seed of the drops, the recordings of the turns and the network profiles; the run number
+      # varies them from run to run, and a failed run repeats with the same seed
+      STRESS_SEED: run-${{ github.run_id }}
+      # the TURN server for the participants behind the TURN-only firewall, on the bridge
+      TURN_SECRET: stress-turn-secret
       # The app and the ASR server allocate while they transcribe the first turns, so the
       # memory check starts this many seconds after READY: the start delay, the first two
       # turns and the pause (20 + 35 + 10 s), and a margin.
@@ -202,9 +207,30 @@ jobs:
       - name: Create a network namespace for each participant
         # The services below are reached at 10.201.0.1, the host address of the bridge, thus
         # the bridge must exist before they start and before the checks that wait for them.
+        # The seed puts some participants behind a NAT router and some behind a firewall that
+        # only lets TURN through, see stress_netns.sh and NETWORK_PROFILES in stress_call.py.
         run: |
-          sudo live_transcription/tests/integration/stress_netns.sh up "$((STRESS_SPEAKERS + STRESS_LISTENERS))"
+          mkdir -p "$BG_DIR"
+          python3 live_transcription/tests/integration/stress_call.py --url "$NC_URL" --token unused \
+            --seed "$STRESS_SEED" --speakers "$STRESS_SPEAKERS" --listeners "$STRESS_LISTENERS" \
+            --write-plan "$BG_DIR/network-plan.txt"
+          # the TURN-only firewall lets through TCP to these ports only: Nextcloud and the HPB
+          sudo STRESS_TCP_PORTS="${NC_URL##*:},${HPB_URL##*:}" \
+            live_transcription/tests/integration/stress_netns.sh up "$((STRESS_SPEAKERS + STRESS_LISTENERS))" \
+            "$BG_DIR/network-plan.txt"
           ip -br addr show ltsbr0
+
+      - name: Start the TURN server
+        # coturn on the bridge address, with the shared secret of Talk's TURN REST API. The relay
+        # addresses are on the bridge too, where Janus is.
+        run: |
+          docker run -d --name turn --network host coturn/coturn:4.7.0@sha256:a00afb5b4890de4df22bbe70379c6b316685dffee297d53cac1271dcb91fab93 \
+            -n --log-file=stdout --listening-ip=10.201.0.1 --relay-ip=10.201.0.1 --listening-port=3478 \
+            --min-port=49160 --max-port=49660 --use-auth-secret --static-auth-secret="$TURN_SECRET" \
+            --realm=stress.local --no-tls --no-dtls --no-cli --fingerprint \
+            --allowed-peer-ip=10.201.0.0-10.201.255.255
+          timeout 30 bash -c 'until docker logs turn 2>&1 | grep -q "relay 10.201.0.1 initialization done"; do sleep 1; done' \
+            || { docker logs turn; exit 1; }
 
       - name: Start the HPB (signaling server and Janus)
         run: |
@@ -258,6 +284,9 @@ jobs:
       - name: Configure the HPB in Talk
         run: |
           ./occ talk:signaling:add "$HPB_URL" "$HPB_SECRET"
+          # Talk hands both to the clients in the signaling settings, as for real browsers
+          ./occ talk:stun:add 10.201.0.1:3478
+          ./occ talk:turn:add turn 10.201.0.1:3478 udp,tcp --secret "$TURN_SECRET"
           ./occ talk:signaling:list
           ./occ talk:stun:list
           ./occ talk:turn:list
@@ -320,11 +349,14 @@ jobs:
           curl -fsS -u stress-listener-001:stress-listener-001 -H 'OCS-APIRequest: true' -H 'Accept: application/json' \
             "$NC_URL/ocs/v2.php/apps/spreed/api/v1/live-transcription/languages" | jq -c '.ocs.data | keys'
 
-      - name: Download the speech recording
+      - name: Check the speech recordings
+        # The turns play the recordings of tests/integration/audio, in English, German, Spanish,
+        # French, Italian, Russian, Ukrainian and Hindi, see audio/REUSE.md. clips.json has the
+        # checksum of each file.
         run: |
           mkdir -p "$BG_DIR/stress"
-          curl -fsSL -o "$BG_DIR/speech.wav" \
-            https://raw.githubusercontent.com/ggml-org/whisper.cpp/4979e04f5dcaccb36057e059bbaed8a2f5288315/samples/jfk.wav
+          cd live_transcription/tests/integration/audio
+          jq -r '.clips[] | "\(.sha256)  \(.file)"' clips.json | sha256sum --check --strict
 
       - name: Run the call with the speakers and the listeners, with drops and reconnects
         id: call
@@ -341,7 +373,7 @@ jobs:
           live_transcription/tests/integration/bg.sh start stress 600 -- \
             sudo -E "$(command -v python3)" live_transcription/tests/integration/stress_call.py \
             --url "$NC_URL" --token "$TOKEN" --speakers "$STRESS_SPEAKERS" --listeners "$STRESS_LISTENERS" \
-            --password-prefix '' --audio "$BG_DIR/speech.wav" --minutes "$STRESS_MINUTES" \
+            --password-prefix '' --minutes "$STRESS_MINUTES" --seed "$STRESS_SEED" \
             --turn 20 --overlap 5 --pause 10 --start-delay "$STRESS_START_DELAY" --drop-probability 0.15 \
             --uid "$(id -u)" --gid "$(id -g)" --out "$BG_DIR/stress"
           sleep "$STRESS_WARMUP"
@@ -420,7 +452,7 @@ jobs:
           echo "::group::memory"; cat "$BG_DIR/memory.log" 2>/dev/null || true; echo "::endgroup::"
           echo "::group::stress_call.py"; cat "$BG_DIR/stress.log" 2>/dev/null || true; echo "::endgroup::"
           echo "::group::stress summary"; cat "$BG_DIR/stress/summary.json" 2>/dev/null || true; echo "::endgroup::"
-          for container in live_transcription signaling janus; do
+          for container in live_transcription signaling janus turn; do
             echo "::group::docker logs $container"; docker logs "$container" 2>&1 | tail -n 500 || true; echo "::endgroup::"
           done
           echo "::group::live_transcription lt.log"; tail -n 1000 "$MODELS_DIR/logs/lt.log" 2>/dev/null || true; echo "::endgroup::"

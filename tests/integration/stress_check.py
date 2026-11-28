@@ -23,16 +23,33 @@ Reads <user>.jsonl, schedule.json and summary.json from DIR, prints a report and
   reconnects    every participant that dropped rejoined, a listener gets transcripts
                 again in the first window after its rejoin, and a speaker is transcribed
                 again in its first window after its rejoin
+  content       in each speaking window that was heard, the transcripts of its speaker
+                contain at least one of the expected words of the recording it played
+                (audio/clips.json), whatever language the window before had
 
 Usage: stress_check.py DIR [--min-per-speaker 5] [--max-gap 0.10] [--first-latency 8] [--tail-latency 8]
+                           [--clips audio/clips.json]
 """
 
 import argparse
 import json
 import math
 import sys
+import unicodedata
 from collections import Counter
 from pathlib import Path
+
+# the profiles of stress_call.py that cut the network for a while
+NETWORK_OUTAGE = {"blip": True, "outage": True}
+
+
+def words(text: str) -> set[str]:
+	"""The words of a text, compared without case, punctuation and the spelling variants that
+	the model and the reference texts use in Devanagari: nukta, and candrabindu for anusvara.
+	"""
+	text = unicodedata.normalize("NFD", text.lower()).replace("\u093c", "").replace("\u0901", "\u0902")
+	text = unicodedata.normalize("NFC", text)
+	return set("".join(c if c.isalnum() or unicodedata.category(c).startswith("M") else " " for c in text).split())
 
 
 def load(directory: Path) -> tuple[dict, list[dict], dict[str, list[dict]]]:
@@ -47,13 +64,19 @@ def load(directory: Path) -> tuple[dict, list[dict], dict[str, list[dict]]]:
 
 
 def connected_intervals(events: list[dict], end: float) -> list[tuple[float, float]]:
-	"""The times in which the participant was in the call, from "ready" to a drop, a loss or "left"."""
+	"""The times in which the participant was in the call and reachable.
+
+	From "ready" to a drop, a lost signaling connection, the start of a network outage, a failed
+	media connection of a speaker, or "left". A speaker's media failure or an outage ends the
+	interval even though the session may stay, because the participant hears or sends nothing then.
+	"""
+	breaks = ("drop", "left", "outage_start", "signaling_lost", "media_failed")
 	intervals = []
 	since = None
 	for e in events:
 		if e["event"] == "ready" and since is None:
 			since = e["t"]
-		elif since is not None and (e["event"] in ("drop", "left") or e.get("disconnected")):
+		elif since is not None and (e["event"] in breaks or e.get("disconnected")):
 			intervals.append((since, e["t"]))
 			since = None
 	if since is not None:
@@ -73,11 +96,13 @@ def percentile(values: list[float], q: float) -> float | None:
 
 
 class Checker:
-	def __init__(self, args, summary: dict, windows: list[dict], records: dict[str, list[dict]]):
+	def __init__(self, args, summary: dict, windows: list[dict], records: dict[str, list[dict]],
+			clips: dict[str, dict] | None = None):
 		self.args = args
 		self.summary = summary
 		self.windows = windows
 		self.records = records
+		self.clips = clips or {}
 		self.start = summary["start"]
 		self.end = summary["end"]
 		self.speakers = summary["speakers"]
@@ -111,7 +136,9 @@ class Checker:
 		participants = self.summary["participants"]
 		missing = sorted(u for u, p in participants.items() if not p["joined"])
 		failed = sorted(f"{u} ({p['exitcode']})" for u, p in participants.items() if p["exitcode"] != 0)
-		lost = sorted(u for u, events in self.records.items() if any(e.get("disconnected") for e in events))
+		# a lost signaling connection is expected only during or right after an outage of its own network
+		lost = sorted(u for u, events in self.records.items()
+			if any(e["event"] == "signaling_lost" and not self.after_outage(u, e["t"]) for e in events))
 		errors = Counter(u for u, events in self.records.items() for e in events if e["event"] == "error")
 		self.report["participants"] = {"count": len(participants), "not_joined": missing, "failed": failed,
 			"lost_connection": lost, "errors": dict(errors)}
@@ -120,9 +147,26 @@ class Checker:
 		if failed:
 			self.fail("participants", f"exit codes other than 0: {' '.join(failed)}")
 		if lost:
-			self.fail("participants", f"lost the signaling connection without a planned drop: {' '.join(lost)}")
+			self.fail("participants", f"lost the signaling connection without an outage of its network: "
+				f"{' '.join(lost)}")
 		if self.summary.get("stopped_early"):
 			self.fail("participants", "stress_call.py was stopped before the end of the schedule")
+
+	def outages(self, user: str) -> list[tuple[float, float]]:
+		"""(start, end) of every network outage of a participant."""
+		result = []
+		start = None
+		for e in self.records.get(user, []):
+			if e["event"] == "outage_start":
+				start = e["t"]
+			elif e["event"] == "outage_end" and start is not None:
+				result.append((start, e["t"]))
+				start = None
+		return result
+
+	def after_outage(self, user: str, t: float) -> bool:
+		"""Whether t is in an outage of the user, or within the time a dead connection takes to be noticed."""
+		return any(start <= t <= end + self.args.detect_seconds for start, end in self.outages(user))
 
 	def check_delivery(self):
 		counts = {}
@@ -140,8 +184,10 @@ class Checker:
 		self.report["delivery"] = counts
 
 	def check_fairness(self):
+		# listeners on a plain network that never dropped: they must get the same transcripts
 		steady = [u for u in self.listeners if self.summary["participants"][u]["joined"]
-			and not any(e["event"] in ("drop", "rejoined") for e in self.records[u])]
+			and self.summary["participants"][u].get("profile", "plain") == "plain"
+			and not any(e["event"] in ("drop", "rejoined", "resumed", "signaling_lost") for e in self.records[u])]
 		counts = {u: len(self.transcripts[u]) for u in steady}
 		gap = None
 		if counts and max(counts.values()):
@@ -247,9 +293,118 @@ class Checker:
 						f"{got}")
 		self.report["reconnects"] = drops
 
+	def check_content(self):
+		"""Each heard window was transcribed as the recording it played, in that recording's language."""
+		per_language: dict[str, dict] = {}
+		missing = []
+		for window in self.windows:
+			clip = self.clips.get(window.get("clip", ""))
+			if clip is None or not self.heard(window):
+				continue
+			heard = set()
+			until = window["end"] + self.args.tail_latency
+			for listener in self.listeners:
+				for e in self.transcripts[listener]:
+					if e["speaker"] == window["speaker"] and window["start"] <= e["t"] <= until:
+						heard |= words(e["text"])
+			found = [w for w in clip["expect"] if words(w) <= heard]
+			stats = per_language.setdefault(clip["language"], {"windows": 0, "matched": 0})
+			stats["windows"] += 1
+			stats["matched"] += bool(found)
+			if not found:
+				missing.append((window, clip))
+		self.report["content"] = per_language
+		for window, clip in missing:
+			self.fail("content", f"{window['speaker']} played {clip['file']} ({clip['language']}) in the window at "
+				f"+{window['start'] - self.start:.0f}s, and no transcript of it contains any of {clip['expect']}")
+
+	def first_window_after(self, user: str, t: float) -> dict | None:
+		"""The first heard window that starts after t: of the user if a speaker, else of any speaker."""
+		candidates = self.windows_of(user) if user in self.speakers else self.windows
+		return next((w for w in candidates if w["start"] >= t and self.heard(w)), None)
+
+	def recovered(self, user: str, after: float) -> tuple[bool | None, str]:
+		"""Whether the user hears (listener) or is heard (speaker) again in the first window after a time.
+
+		None when no window is left to tell.
+		"""
+		window = self.first_window_after(user, after)
+		if window is None:
+			return None, "no window left"
+		at = f"+{window['start'] - self.start:.0f}s"
+		if user in self.speakers:
+			heard = sum(1 for u in self.listeners if self.first_transcript(u, user, window) is not None)
+			return heard > 0, f"{heard} listeners got its window at {at}"
+		latency = self.first_transcript(user, window["speaker"], window)
+		if latency is None:
+			return False, f"nothing of {window['speaker']} in the window at {at}"
+		return latency <= self.args.first_latency, f"first transcript of the window at {at} after {latency:.1f}s"
+
+	def check_network(self):  # noqa: C901 - one branch for each symptom
+		"""Each participant with an impaired network showed its symptom and behaved as expected.
+
+		nat and turnonly: a speaker's media reached the SFU over the expected path, srflx or host
+		behind NAT, a TURN relay behind the TURN-only firewall. latency, jitter, lossy and slow: the
+		participant stayed connected, and a listener got the transcripts in time, under the same
+		limits as everybody. blip and outage: the network was cut; the participant noticed it,
+		reconnected (resumed its session or joined with a new one) after the network came back,
+		and heard or was heard in the first window after that.
+		"""
+		per_user = {}
+		for user, info in self.summary["participants"].items():
+			profile = info.get("profile", "plain")
+			if profile == "plain":
+				continue
+			events = self.records.get(user, [])
+			entry = per_user[user] = {"profile": profile, "role": info["role"]}
+			paths = [e for e in events if e["event"] == "media_connected"]
+			if paths:
+				entry["ice"] = sorted({f"{e.get('local')}->{e.get('remote')}" for e in paths})
+			if info["role"] == "speaker" and paths:
+				local = {e.get("local") for e in paths}
+				if profile == "turnonly" and local != {"relay"}:
+					self.fail("network", f"{user} is behind a TURN-only firewall, but its media used {entry['ice']}")
+				if info.get("kind") == "nat" and "relay" in local:
+					self.fail("network", f"{user} is behind a plain NAT, but its media needed TURN: {entry['ice']}")
+			elif info["role"] == "speaker" and info["joined"]:
+				self.fail("network", f"{user} ({profile}) never got its media connected to the SFU")
+
+			outages = self.outages(user)
+			if NETWORK_OUTAGE.get(profile):
+				if not outages:
+					entry["outage"] = "none, the schedule had no room for it"
+					continue
+				start, end = outages[0]
+				entry["outage"] = f"+{start - self.start:.0f}s for {end - start:.0f}s"
+				noticed = next((e for e in events if e["event"] in ("signaling_lost", "media_failed")
+					and start <= e["t"] <= end + self.args.detect_seconds), None)
+				back = next((e for e in events if e["event"] in ("resumed", "rejoined", "republished")
+					and e["t"] >= start), None)
+				entry["noticed_after"] = noticed and round(noticed["t"] - start, 1)
+				entry["recovery"] = back and ("resumed" if back["event"] == "resumed" else "new session")
+				entry["back_after_heal"] = back and round(back["t"] - end, 1)
+				if noticed is None and end - start > self.args.detect_seconds:
+					self.fail("network", f"{user}: the network was cut for {end - start:.0f}s at "
+						f"+{start - self.start:.0f}s and the participant did not notice")
+				if noticed is not None and back is None:
+					self.fail("network", f"{user}: lost its connection in the outage at +{start - self.start:.0f}s "
+						"and never got back")
+					continue
+				if back is not None and back["t"] - end > self.args.recovery_seconds:
+					self.fail("network", f"{user}: back {back['t'] - end:.0f}s after the network came back, "
+						f"limit {self.args.recovery_seconds:g}s")
+				ok, how = self.recovered(user, max(end, back["t"] if back else end))
+				entry["next_window"] = how
+				if ok is False:
+					self.fail("network", f"{user}: after the outage at +{start - self.start:.0f}s: {how}")
+			elif any(e["event"] == "signaling_lost" for e in events):
+				entry["signaling_lost"] = sum(1 for e in events if e["event"] == "signaling_lost")
+				self.fail("network", f"{user} ({profile}) lost its signaling connection without an outage")
+		self.report["network"] = per_user
+
 	def run(self) -> int:
 		for check in (self.check_participants, self.check_delivery, self.check_fairness, self.check_timeliness,
-				self.check_attribution, self.check_reconnects):
+				self.check_attribution, self.check_reconnects, self.check_content, self.check_network):
 			check()
 		self.report["memory"] = self.summary.get("memory")
 		self.report["failures"] = self.failures
@@ -292,6 +447,14 @@ class Checker:
 		for user, d in sorted(r["reconnects"].items()):
 			print(f"  {user}: {d['kind']} at +{d['at']}s, rejoined after {d['rejoined_after']}s, "
 				+ ", ".join(f"{k} {v}" for k, v in d.items() if k.startswith("next_window")))
+		if r.get("content"):
+			print("content: " + ", ".join(f"{lang} {c['matched']}/{c['windows']}"
+				for lang, c in sorted(r["content"].items())) + " windows with the expected words")
+		if r.get("network"):
+			print(f"network: {len(r['network'])} participants with an impaired network")
+			for user, n in sorted(r["network"].items(), key=lambda x: (x[1]["profile"], x[0])):
+				print(f"  {user} ({n['role']}, {n['profile']}): " + ", ".join(f"{k} {v}" for k, v in n.items()
+					if k not in ("profile", "role")))
 		for role, m in (r["memory"] or {}).items():
 			print(f"memory of the {role}s: max RSS {m.get('max_rss_kib', 0) / 1024:.1f} MiB, "
 				f"max PSS {m.get('max_pss_kib', 0) / 1024:.1f} MiB, "
@@ -310,9 +473,16 @@ def main() -> int:
 		help="seconds from the start of a window to its first transcript")
 	parser.add_argument("--tail-latency", type=float, default=8,
 		help="seconds after the end of a window in which its transcripts may still arrive")
+	parser.add_argument("--clips", type=Path, default=Path(__file__).parent / "audio" / "clips.json",
+		help="manifest of the recordings, with the expected words of each")
+	parser.add_argument("--detect-seconds", type=float, default=45,
+		help="seconds after an outage in which a participant may still notice its dead connection")
+	parser.add_argument("--recovery-seconds", type=float, default=40,
+		help="seconds after the network came back in which a participant must be back in the call")
 	args = parser.parse_args()
 
-	checker = Checker(args, *load(args.dir))
+	clips = {c["file"]: c for c in json.loads(args.clips.read_text(encoding="utf-8"))["clips"]}
+	checker = Checker(args, *load(args.dir), clips=clips)
 	code = checker.run()
 	(args.dir / "report.json").write_text(json.dumps(checker.report, indent=1) + "\n")
 	return code

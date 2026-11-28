@@ -10,3 +10,22 @@ path = ["requirements.txt", "requirements_dev.txt"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "2025 Nextcloud GmbH and Nextcloud contributors"
 SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+# Speech recordings of the stress test, see tests/integration/audio/REUSE.md
+[[annotations]]
+path = "tests/integration/audio/fleurs-*.opus"
+precedence = "override"
+SPDX-FileCopyrightText = "2022 Google LLC, FLEURS (https://huggingface.co/datasets/google/fleurs)"
+SPDX-License-Identifier = "CC-BY-4.0"
+
+[[annotations]]
+path = "tests/integration/audio/librivox-*.opus"
+precedence = "override"
+SPDX-FileCopyrightText = "LibriVox (https://librivox.org), read by Sonali Ekka"
+SPDX-License-Identifier = "CC-PDM-1.0"
+
+[[annotations]]
+path = "tests/integration/audio/clips.json"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Nextcloud GmbH and Nextcloud contributors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"

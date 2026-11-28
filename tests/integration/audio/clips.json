@@ -1,0 +1,228 @@
+{
+ "clips": [
+  {
+   "file": "fleurs-en-1544.opus",
+   "language": "en",
+   "source": "FLEURS en_us dev, id 1544",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/en_us/audio/dev.tar.gz",
+   "member": "dev/16131823300806444840.wav",
+   "sha256_of_source": "5edc6f643502d49f46438a222841e621071eb2f50a6016a1c21e3d1dcc5b0fb6",
+   "license": "CC-BY-4.0",
+   "text": "Insects were the first animals to take to the air. Their ability to fly helped them evade enemies more easily and find food and mates more efficiently.",
+   "expect": [
+    "insects",
+    "animals",
+    "enemies"
+   ],
+   "sha256": "1b84be0d55981ad3f8939e62f9cc5eb0f4053717be3c798ec50e84aa0f868a20"
+  },
+  {
+   "file": "fleurs-en-1646.opus",
+   "language": "en",
+   "source": "FLEURS en_us dev, id 1646",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/en_us/audio/dev.tar.gz",
+   "member": "dev/7939024995221969344.wav",
+   "sha256_of_source": "49a61b4e3ca8e15ec1efc930e0e77094e523808b4dd36152d9edb4cadad3190e",
+   "license": "CC-BY-4.0",
+   "text": "There are many beaches, due to Auckland's straddling of two harbours. The most popular ones are in three areas.",
+   "expect": [
+    "beaches",
+    "auckland",
+    "popular"
+   ],
+   "sha256": "f71bd801136a6fe5656cbcc6306f77b2cca3db901701fad06cb65170bbcea9f2"
+  },
+  {
+   "file": "fleurs-de-1551.opus",
+   "language": "de",
+   "source": "FLEURS de_de dev, id 1551",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/de_de/audio/dev.tar.gz",
+   "member": "dev/9398730551118591238.wav",
+   "sha256_of_source": "836e872b1167a1de6056f13a20d32fbf2c46ebf4cca56de4135be92d738eab94",
+   "license": "CC-BY-4.0",
+   "text": "Sie versuchen immer noch herauszufinden, wie umfangreich der Zusammenstoß war und wie die Erde davon beeinträchtigt werden wird.",
+   "expect": [
+    "herauszufinden",
+    "zusammenstoß",
+    "erde"
+   ],
+   "sha256": "90f2f52a775f5a6c71e61ac9182fd3c6cb81d59c0a68a3ac40450e4461c7cacd"
+  },
+  {
+   "file": "fleurs-de-1585.opus",
+   "language": "de",
+   "source": "FLEURS de_de dev, id 1585",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/de_de/audio/dev.tar.gz",
+   "member": "dev/12721272933411946980.wav",
+   "sha256_of_source": "8c459576fcec158113c0cf8c1b3009a602dc693f5dc97eb7699d2e610d322f5c",
+   "license": "CC-BY-4.0",
+   "text": "Mit der Zeit beginnt sich die neue Population an ihre neue Umgebung anzupassen, und dann sieht sie der anderen Population immer weniger ähnlich.",
+   "expect": [
+    "population",
+    "umgebung",
+    "anzupassen"
+   ],
+   "sha256": "f427e5ad731a6bbc6393687b465544dcdf31b7b21f27639553e305bea5868978"
+  },
+  {
+   "file": "fleurs-es-1565.opus",
+   "language": "es",
+   "source": "FLEURS es_419 dev, id 1565",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/es_419/audio/dev.tar.gz",
+   "member": "dev/6301772384907442579.wav",
+   "sha256_of_source": "61e0723bdb65fbb093b4a9175ded22c11670179dd7c9643f2e88146f5ece99b7",
+   "license": "CC-BY-4.0",
+   "text": "El objetivo capital de la ciencia es descifrar el modo en que funciona el mundo a través del método científico. En efecto, este método sirve de guía para la mayor parte de las investigaciones científicas.",
+   "expect": [
+    "ciencia",
+    "método",
+    "mundo"
+   ],
+   "sha256": "a6490273e1128eff4c54d855b73251137baaf1ef42f76904ba1a0178b8c70151"
+  },
+  {
+   "file": "fleurs-es-1635.opus",
+   "language": "es",
+   "source": "FLEURS es_419 dev, id 1635",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/es_419/audio/dev.tar.gz",
+   "member": "dev/4151236193246321517.wav",
+   "sha256_of_source": "bda655cdf7df44122867dbcb11a02e05202d0521d07bf6dcc49e76a3f09b7b6b",
+   "license": "CC-BY-4.0",
+   "text": "Podemos comenzar a llevar una vida más amigable con el planeta, formar parte de movimientos ambientalistas o, incluso, podemos volvernos activistas y luchar para aminorar, en alguna medida, el sufrimiento futuro.",
+   "expect": [
+    "planeta",
+    "movimientos",
+    "activistas"
+   ],
+   "sha256": "dd8e573531c1252f3682ef89321b2ad93ccfb3a0ab19b6c1fed851f1f4fd9bc0"
+  },
+  {
+   "file": "fleurs-fr-1646.opus",
+   "language": "fr",
+   "source": "FLEURS fr_fr dev, id 1646",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/fr_fr/audio/dev.tar.gz",
+   "member": "dev/14203199903136889342.wav",
+   "sha256_of_source": "e948c3af4ee7347a2d3d8a7b27ade62943cce4d046eafa705d25abdf9abca25e",
+   "license": "CC-BY-4.0",
+   "text": "Les plages sont nombreuses, car Auckland est à cheval sur deux ports. Les plus populaires se trouvent dans trois zones.",
+   "expect": [
+    "plages",
+    "auckland",
+    "populaires"
+   ],
+   "sha256": "a2157a7369a1c70f5a5777735a3e569ef786ede2468948df72874ee4bf9ac673"
+  },
+  {
+   "file": "fleurs-it-1548.opus",
+   "language": "it",
+   "source": "FLEURS it_it dev, id 1548",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/it_it/audio/dev.tar.gz",
+   "member": "dev/6052581350654684564.wav",
+   "sha256_of_source": "05fa58c780e288ee75623f336bbb236c9003209503f242f462aa15ec3ec6ba63",
+   "license": "CC-BY-4.0",
+   "text": "Per telefonare a qualcuno lontano migliaia di miglia, si utilizza un satellite.",
+   "expect": [
+    "telefonare",
+    "satellite",
+    "miglia"
+   ],
+   "sha256": "cadf66b5a6c44c864d0f2227bb136bdaf354b7fed9babcae97a182e7680662b4"
+  },
+  {
+   "file": "fleurs-ru-1592.opus",
+   "language": "ru",
+   "source": "FLEURS ru_ru dev, id 1592",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/ru_ru/audio/dev.tar.gz",
+   "member": "dev/16401100064950446126.wav",
+   "sha256_of_source": "844d673059715ac674368e5433bbd80b40764ec67813a98336e74acb110483c9",
+   "license": "CC-BY-4.0",
+   "text": "Когда вы вначале отправились за границу, люди, скорее всего, относились к вам с терпением и пониманием, зная, что путешественникам нужно адаптироваться в новой стране.",
+   "expect": [
+    "границу",
+    "терпением",
+    "стране"
+   ],
+   "sha256": "5c18a0f9a232b89123200efd98bd4754b0c5e7c315fabc86b71af9037d6ccedc"
+  },
+  {
+   "file": "fleurs-uk-1650.opus",
+   "language": "uk",
+   "source": "FLEURS uk_ua dev, id 1650",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/uk_ua/audio/dev.tar.gz",
+   "member": "dev/2478363477344304799.wav",
+   "sha256_of_source": "4e3db376e17f51b0117c008503da9f07562764c6f6a7d4c8fcf68af442f4b17e",
+   "license": "CC-BY-4.0",
+   "text": "Морські крокодили не проводять в океані багато часу, їхнє основне природне середовище — річкові лимани на північ від Рокгемптона.",
+   "expect": [
+    "крокодили",
+    "океані",
+    "часу"
+   ],
+   "sha256": "8535d8ef1459ea76003768260030b833fe815e26f381b0ffb32c15011b734621"
+  },
+  {
+   "file": "fleurs-hi-1559.opus",
+   "language": "hi",
+   "source": "FLEURS hi_in dev, id 1559",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/hi_in/audio/dev.tar.gz",
+   "member": "dev/14584887621258891555.wav",
+   "sha256_of_source": "147ee2f524f05b425f4150fb7c86c8754d4f0660957516c81d9a38134dc261f2",
+   "license": "CC-BY-4.0",
+   "text": "इतालवी भाषा में उच्चारण करना तुलनात्मक रूप से आसान है क्योंकि ज़्यादातर शब्दों का उच्चारण वैसे ही किया जाता है जैसे उन्हें लिखा जाता है",
+   "expect": [
+    "इतालवी",
+    "उच्चारण",
+    "शब्दों"
+   ],
+   "sha256": "6944f56be05395bdea99b69a9a208fe9541ff85d5f049fbb972a55586dfb50d6"
+  },
+  {
+   "file": "fleurs-hi-1648.opus",
+   "language": "hi",
+   "source": "FLEURS hi_in dev, id 1648",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/hi_in/audio/dev.tar.gz",
+   "member": "dev/12888270866141269240.wav",
+   "sha256_of_source": "5eb4f55d0035d7c3318653bd1711ac5f2aab6b0e312947eb55190e8b1ba400ee",
+   "license": "CC-BY-4.0",
+   "text": "कनान देश में बड़े जंगलो के न होने के चलते वहाँ लकड़ियाँ बहुत महंगी थी।",
+   "expect": [
+    "जंगलों",
+    "लकड़ियां",
+    "महंगी"
+   ],
+   "sha256": "42f61041ea6a65fd1411a7374b34666db34fa3411044888f66399d036a848954"
+  },
+  {
+   "file": "fleurs-hi-1784.opus",
+   "language": "hi",
+   "source": "FLEURS hi_in test, id 1784",
+   "url": "https://huggingface.co/datasets/google/fleurs/resolve/70bb2e84b976b7e960aa89f1c648e09c59f894dd/data/hi_in/audio/test.tar.gz",
+   "member": "test/10014385262415025488.wav",
+   "sha256_of_source": "b63e6ae5a8a5b53fcd5b60c467790baca13ca0c8490d35418d692ef7751a5459",
+   "license": "CC-BY-4.0",
+   "text": "ग्रीनलैंड को बहुत कम जगह बसाया गया था. नॉर्स सगास में वे कहते हैं कि एरिक रेड हत्या के लिए आइसलैंड से निर्वासित किया गया था, और आगे पश्चिम की यात्रा करते समय, ग्रीनलैंड मिला जिसे ग्रीनलैंड नाम दिया गया.",
+   "expect": [
+    "ग्रीनलैंड",
+    "आइसलैंड",
+    "पश्चिम"
+   ],
+   "sha256": "8e58e153cf9ae7dd8fa08859c8bd4f4a7a1688b05013026bfaf22b04540f4224"
+  },
+  {
+   "file": "librivox-hi-himalay-ka-pathik.opus",
+   "language": "hi",
+   "source": "LibriVox, Multilingual Short Works Collection 042, track 10: हिमालय का पथिक (Himalay ka Pathik) by Jaishankar Prasad, read by Sonali Ekka; 18 s to 80 s",
+   "url": "https://archive.org/download/msw042_2609_librivox/msw042_10_himalaykapathik_prasad_sie_64kb.mp3",
+   "sha1_of_source": "828215a7e54e873d64124a626daa88a73edf63d4",
+   "license": "CC-PDM-1.0",
+   "text": "गिरि-पथ में हिम-वर्षा हो रही है, इस समय तुम कैसे यहाँ पहुँचे? किस प्रबल आकर्षण से तुम खिंच आये? खिड़की खोलकर एक व्यक्ति ने पूछा। अमल धवल चन्द्रिका तुषार से घनीभूत हो रही थी। जहाँ तक दृष्टि जाती है, गगन-चुम्बी शैल शिखर, जिन पर बर्फ का मोटा लिहाफ पड़ा था, ठिठुरकर सो रहे थे। ऐसे ही समय पथिक उस कुटीर के द्वार पर खड़ा था। वह बोला, पहले भीतर आने दो, प्राण बचें! बर्फ जम गई थी, द्वार परिश्रम से खुला। पथिक ने भीतर जा कर उसे बन्द कर लिया। आग के पास पहुँचा, और उष्णता का अनुभव करने लगा। ऊपर से और दो कम्बल डाल दिये गये। कुछ काल बीतने पर पथिक होश में आया। देखा, शैल-गर्भ में एक छोटा-सा गृह धुँधली प्रभा से आलोकित है। एक वृद्ध है और उसकी कन्या।",
+   "expect": [
+    "हिम",
+    "पथिक",
+    "बर्फ",
+    "खिड़की"
+   ],
+   "sha256": "57609e505cf230b74fd301b5e1ca8a06a158dd8c67e9d1d1743d53a9f170cb08"
+  }
+ ]
+}
